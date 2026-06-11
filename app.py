@@ -24,14 +24,14 @@ except ImportError:
 st.set_page_config(layout="wide")
 
 # ===== 常數設定 =====
-REFRESH_SEC = 60
+REFRESH_SEC = 30
 ENABLE_GAP_SIGNAL = True
 GROUP_EDIT_PIN = "1219"
 GROUPS_FILE = "stock_groups.json"
 BACKUP_DIR = "backups"
 STOCK_NAME_FILE = "TWstocklistname.txt"
 
-# ===== Telegram 設定（請替換為你的資訊）=====
+# ===== Telegram 設定 =====
 TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")  
 
@@ -81,7 +81,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ===== 分組讀寫 =====
+# ===== 檔案讀寫工具 =====
 def load_stock_groups():
     if os.path.exists(GROUPS_FILE):
         try:
@@ -283,8 +283,7 @@ def get_stock_name(symbol: str, _sdk) -> str:
 
 # ===== 輔助工具函式 =====
 def make_anchor_id(group_name: str) -> str:
-    anchor = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", group_name).strip("-")
-    return f"group-{anchor}"
+    return f"group-{re.sub(r'[^0-9A-Za-z\u4e00-\u9fff]+', '-', group_name).strip('-')}"
 
 def yahoo_quote_url(symbol: str) -> str:
     fubon_symbol = str(symbol).split(".")[0]
@@ -296,10 +295,7 @@ def normalize_symbols_from_text(text: str):
     text = text.replace("，", ",")
     lines = []
     for raw_line in text.splitlines():
-        raw_line = raw_line.strip()
-        if not raw_line:
-            continue
-        parts = [p.strip().upper() for p in raw_line.split(",") if p.strip()]
+        parts = [p.strip().upper() for p in raw_line.strip().split(",") if p.strip()]
         lines.extend(parts)
     seen = set()
     result = []
@@ -340,15 +336,6 @@ def normalize_symbol_quick(input_text: str):
             return f"{s}.TWO"
         return f"{s}.TW"
     return s
-
-def set_next_selected_group(group_name: str):
-    st.session_state._next_selected_group = group_name
-
-def enter_edit_mode():
-    st.session_state.editing_mode = True
-
-def leave_edit_mode():
-    st.session_state.editing_mode = False
 
 def symbol_to_code(symbol: str) -> str:
     return str(symbol).split(".")[0]
@@ -464,7 +451,7 @@ def render_fubon_login():
     # 已經登入成功就顯示狀態與登出按鈕
     if st.session_state.fubon_logged_in:
         st.sidebar.success("✅ 富邦 API 已成功連線")
-        if st.sidebar.button("登出 / 重新連線", use_container_width=True):
+        if st.sidebar.button("登出 / 重新連線", width="stretch"):
             st.session_state.fubon_sdk = None
             st.session_state.fubon_logged_in = False
             st.rerun()
@@ -484,7 +471,7 @@ def render_fubon_login():
     f_pw = st.sidebar.text_input("富邦登入密碼", key="f_pw_input", type="password")
     f_cert_pw = st.sidebar.text_input("憑證密碼", key="f_cert_pw_input", type="password")
 
-    if st.sidebar.button("連線行情伺服器", use_container_width=True):
+    if st.sidebar.button("連線行情伺服器", width="stretch"):
         if not f_id or not f_pw or not f_cert_pw:
             st.sidebar.warning("請填寫完整的身分證字號與密碼！")
         else:
@@ -514,7 +501,7 @@ def render_group_editor_lock():
     if st.session_state.group_editor_unlocked:
         st.sidebar.success("已解鎖，可編輯股票分組")
         st.sidebar.info("為避免編輯中被重刷，分組編輯解鎖時會暫停自動更新")
-        if st.sidebar.button("鎖定編輯", key="lock_group_editor_btn", use_container_width=True):
+        if st.sidebar.button("鎖定編輯", key="lock_group_editor_btn", width="stretch"):
             st.session_state.group_editor_unlocked = False
             leave_edit_mode()
             st.rerun()
@@ -523,7 +510,7 @@ def render_group_editor_lock():
     pin_input = st.sidebar.text_input(
         "請輸入 PIN 碼以編輯分組", type="password", key="group_edit_pin_input"
     )
-    if st.sidebar.button("解鎖編輯", key="unlock_group_editor_btn", use_container_width=True):
+    if st.sidebar.button("解鎖編輯", key="unlock_group_editor_btn", width="stretch"):
         if pin_input == GROUP_EDIT_PIN:
             st.session_state.group_editor_unlocked = True
             enter_edit_mode()
@@ -550,7 +537,7 @@ def render_stock_group_editor():
 
     with st.sidebar.expander("➕ 新增分類", expanded=False):
         new_group_name = st.text_input("分類名稱", key="new_group_name_input")
-        if st.button("新增分類", key="add_group_btn", use_container_width=True):
+        if st.button("新增分類", key="add_group_btn", width="stretch"):
             enter_edit_mode()
             name = new_group_name.strip()
             if not name:
@@ -579,7 +566,7 @@ def render_stock_group_editor():
             st.caption(f"標準化代碼：{normalized_quick_symbol}")
 
         with quick_col2:
-            if st.button("加入目前分類", key="quick_add_btn", use_container_width=True):
+            if st.button("加入目前分類", key="quick_add_btn", width="stretch"):
                 enter_edit_mode()
                 symbol = normalize_symbol_quick(quick_input)
                 if not symbol:
@@ -600,7 +587,7 @@ def render_stock_group_editor():
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("💾 儲存分類", key="save_group_btn", use_container_width=True):
+            if st.button("💾 儲存分類", key="save_group_btn", width="stretch"):
                 new_name = new_group_name.strip()
                 if not new_name:
                     st.sidebar.warning("分類名稱不可為空")
@@ -620,7 +607,7 @@ def render_stock_group_editor():
                     set_next_selected_group(new_name)
                     st.rerun()
         with col2:
-            if st.button("🗑️ 刪除分類", key="delete_group_btn", use_container_width=True):
+            if st.button("🗑️ 刪除分類", key="delete_group_btn", width="stretch"):
                 if len(groups) <= 1:
                     st.sidebar.warning("至少保留一個分類")
                 else:
@@ -634,8 +621,8 @@ def render_stock_group_editor():
 
     with st.sidebar.expander("📦 備份 / 匯出 / 匯入 JSON", expanded=False):
         export_json_str = json.dumps(st.session_state.stock_groups, ensure_ascii=False, indent=2)
-        st.download_button(label="⬇️ 匯出目前分組 JSON", data=export_json_str, file_name="stock_groups.json", mime="application/json", key="download_groups_json_btn", use_container_width=True)
-        if st.button("🗂️ 建立本地備份", key="create_local_backup_btn", use_container_width=True):
+        st.download_button(label="⬇️ 匯出目前分組 JSON", data=export_json_str, file_name="stock_groups.json", mime="application/json", key="download_groups_json_btn", width="stretch")
+        if st.button("🗂️ 建立本地備份", key="create_local_backup_btn", width="stretch"):
             try:
                 backup_file = save_backup_snapshot(st.session_state.stock_groups)
                 st.sidebar.success(f"已建立備份：{os.path.basename(backup_file)}")
@@ -644,7 +631,7 @@ def render_stock_group_editor():
         uploaded_file = st.file_uploader("上傳股票分組 JSON", type=["json"], key="upload_groups_json_file")
         if uploaded_file is not None:
             st.caption("上傳後按下「匯入並覆蓋目前分組」才會生效")
-            if st.button("📥 匯入並覆蓋目前分組", key="import_groups_json_btn", use_container_width=True):
+            if st.button("📥 匯入並覆蓋目前分組", key="import_groups_json_btn", width="stretch"):
                 try:
                     raw = uploaded_file.read()
                     data = json.loads(raw.decode("utf-8"))
@@ -669,7 +656,7 @@ def render_stock_group_editor():
             st.caption("目前沒有本地備份檔")
 
     with st.sidebar.expander("♻️ 重設", expanded=False):
-        if st.button("還原預設分組", key="reset_groups_btn", use_container_width=True):
+        if st.button("還原預設分組", key="reset_groups_btn", width="stretch"):
             try:
                 save_backup_snapshot(st.session_state.stock_groups)
             except Exception:
@@ -820,7 +807,7 @@ st.markdown('<div id="dashboard-top"></div>', unsafe_allow_html=True)
 col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 
 with col1:
-    if st.button("🔄 手動更新即時資料 (清除快取)", use_container_width=True):
+    if st.button("🔄 手動更新即時資料 (清除快取)", width="stretch"):
         st.cache_data.clear()
         st.rerun()
 
@@ -905,6 +892,7 @@ if st.session_state.tg_push_enabled:
         # 修正：關閉排程時不應預設推播，否則 Streamlit 重刷就會一直送訊息
         can_push_now = False
 
+# 資料抓取與統計迴圈
 group_tables = {}
 group_up_summary = []
 
@@ -916,6 +904,9 @@ for group_name, stocks in st.session_state.stock_groups.items():
 
     for symbol in stocks:
         try:
+            # 💡 加入短暫延遲，避免密集呼叫導致富邦 API Rate limit exceeded (429 錯誤)
+            time.sleep(0.3)
+            
             df = download_stock_data(symbol, st.session_state.fubon_sdk)
             df = normalize_ohlc(df)
             if df.empty: raise ValueError("無效的 K 線資料")
@@ -1000,7 +991,7 @@ for group_name, info in group_tables.items():
     table_df = info["table"].copy()
     if not table_df.empty and "代碼網址" in table_df.columns: table_df["代碼"] = table_df["代碼網址"]
     display_columns = ["代碼", "股票名稱", "價格", "漲跌%", "MA位置", "MA排列", "K值", "D值", "KD訊號", "跳空訊號"]
-    st.dataframe(table_df[display_columns], use_container_width=True, column_config={
+    st.dataframe(table_df[display_columns], width="stretch", column_config={
         "代碼": st.column_config.LinkColumn("代碼", help="點擊前往台股 Yahoo", display_text=r"https://tw.stock.yahoo.com/quote/(.*)"),
         "股票名稱": st.column_config.TextColumn("股票名稱")
     })
