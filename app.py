@@ -275,7 +275,7 @@ def download_stock_data(symbol: str, _sdk):
         
     fubon_symbol = str(symbol).split(".")[0]
     end_date = date.today()
-    start_date = end_date - timedelta(days=90)
+    start_date = end_date - timedelta(days=22)
     
     for attempt in range(3):  # 最多重試 3 次
         try:
