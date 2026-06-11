@@ -190,7 +190,7 @@ def check_telegram_push_command():
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
     params = {"timeout": 1} 
     
-    if st.session_state.tg_last_update_id:
+    if st.session_state.get("tg_last_update_id"):
         params["offset"] = st.session_state.tg_last_update_id + 1
 
     try:
@@ -448,7 +448,7 @@ def render_fubon_login():
             st.rerun()
         return
 
-    # 嘗試從 Secrets 讀取憑證檔案
+    # 嘗試從 Secrets 讀取憑證檔案 (現在只需要讀取 Base64 字串)
     try:
         fubon_secrets = st.secrets["fubon"]
         pfx_base64 = fubon_secrets["pfx_base64"]
@@ -896,14 +896,14 @@ for group_name, stocks in st.session_state.stock_groups.items():
     for symbol in stocks:
         try:
             # 💡 加入短暫延遲，避免密集呼叫導致富邦 API Rate limit exceeded (429 錯誤)
-            time.sleep(0.3)
+            time.sleep(1.0)
             
-            df = download_stock_data(symbol, st.session_state.fubon_sdk)
+            df = download_stock_data(symbol, st.session_state.get("fubon_sdk", None))
             df = normalize_ohlc(df)
             if df.empty: raise ValueError("無效的 K 線資料")
 
-            price = get_last_price(symbol, df, st.session_state.fubon_sdk)
-            stock_name = get_stock_name(symbol, st.session_state.fubon_sdk)
+            price = get_last_price(symbol, df, st.session_state.get("fubon_sdk", None))
+            stock_name = get_stock_name(symbol, st.session_state.get("fubon_sdk", None))
             data = compute_indicators(df, price)
 
             # ===== 執行推播檢查 =====
@@ -947,7 +947,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
         except Exception as e:
             error_count += 1
             rows.append({
-                "代碼": symbol, "代碼網址": "", "股票名稱": get_stock_name(symbol, st.session_state.fubon_sdk),
+                "代碼": symbol, "代碼網址": "", "股票名稱": get_stock_name(symbol, st.session_state.get("fubon_sdk", None)),
                 "價格": "錯誤", "漲跌%": "-", "MA位置": "-", "MA排列": "-",
                 "K值": "-", "D值": "-", "KD訊號": "-", "跳空訊號": str(e)
             })
