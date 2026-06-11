@@ -5,6 +5,7 @@ import copy
 import time
 import gc
 import requests
+import base64
 from html import escape
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -489,6 +490,8 @@ def sync_editor_fields_from_selected_group():
 # ===== UI 元件 =====
 def render_fubon_login():
     st.sidebar.markdown("## 🔑 富邦 API 設定 (Fubon Neo)")
+    
+    # 已經登入成功就顯示狀態與登出按鈕
     if st.session_state.fubon_logged_in:
         st.sidebar.success("✅ 富邦 API 已成功連線")
         if st.sidebar.button("登出 / 重新連線", use_container_width=True):
@@ -497,26 +500,45 @@ def render_fubon_login():
             st.rerun()
         return
 
-    st.sidebar.info("請輸入富邦證券資訊以取得即時行情")
-    f_id = st.sidebar.text_input("身分證字號", key="f_id_input", type="password")
-    f_pw = st.sidebar.text_input("密碼", key="f_pw_input", type="password")
-    f_cert = st.sidebar.text_input("憑證路徑 (.pfx)", key="f_cert_input")
+    # 嘗試從 Secrets 讀取憑證檔案 (現在只需要讀取 Base64 字串)
+    try:
+        fubon_secrets = st.secrets["fubon"]
+        pfx_base64 = fubon_secrets["pfx_base64"]
+    except KeyError:
+        st.sidebar.error("❌ 找不到 Streamlit Secrets 中的 pfx_base64 憑證資料。")
+        return
+
+    # 在側邊欄顯示輸入框，讓使用者每次手動輸入完整登入資訊
+    st.sidebar.info("請輸入富邦證券登入資訊")
+    f_id = st.sidebar.text_input("身分證字號", key="f_id_input")
+    f_pw = st.sidebar.text_input("富邦登入密碼", key="f_pw_input", type="password")
     f_cert_pw = st.sidebar.text_input("憑證密碼", key="f_cert_pw_input", type="password")
 
     if st.sidebar.button("連線行情伺服器", use_container_width=True):
-        if not all([f_id, f_pw, f_cert, f_cert_pw]):
-            st.sidebar.warning("請填寫完整登入資訊")
+        if not f_id or not f_pw or not f_cert_pw:
+            st.sidebar.warning("請填寫完整的身分證字號與密碼！")
         else:
             try:
-                sdk = FubonSDK()
-                sdk.login(f_id, f_pw, f_cert, f_cert_pw)
-                sdk.init_realtime()
-                st.session_state.fubon_sdk = sdk
-                st.session_state.fubon_logged_in = True
+                # 1. 將 Base64 文字還原為暫存的 .pfx 檔案
+                temp_cert_path = "temp_cloud_cert.pfx"
+                with open(temp_cert_path, "wb") as f:
+                    f.write(base64.b64decode(pfx_base64))
+                    
+                # 2. 執行登入 (合併使用者輸入的帳密與雲端的檔案)
+                with st.spinner("連線富邦 API 中..."):
+                    sdk = FubonSDK()
+                    # 確保傳入的身分證字號英文是大寫 (.upper())
+                    sdk.login(f_id.strip().upper(), f_pw, temp_cert_path, f_cert_pw)
+                    sdk.init_realtime()
+                    st.session_state.fubon_sdk = sdk
+                    st.session_state.fubon_logged_in = True
+                    
                 st.sidebar.success("✅ 富邦 API 連線成功！")
                 st.rerun()
+                
             except Exception as e:
                 st.sidebar.error(f"❌ 登入失敗: {e}")
+
 
 def render_group_editor_lock():
     st.sidebar.markdown("## 🔐 分組編輯鎖")
