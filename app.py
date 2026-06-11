@@ -31,7 +31,7 @@ GROUPS_FILE = "stock_groups.json"
 BACKUP_DIR = "backups"
 STOCK_NAME_FILE = "TWstocklistname.txt"
 
-# ===== Telegram 設定（請替換為你的資訊）=====
+# ===== Telegram 設定 =====
 TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")  
 
@@ -64,6 +64,59 @@ DEFAULT_STOCK_GROUPS = {
     ],
 }
 
+# ===== 檔案讀寫工具 =====
+def load_stock_groups():
+    if os.path.exists(GROUPS_FILE):
+        try:
+            with open(GROUPS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data:
+                return data
+        except Exception:
+            pass
+    return copy.deepcopy(DEFAULT_STOCK_GROUPS)
+
+# ===== Session State 初始化 (移到最上方確保絕對安全) =====
+if "auto_refresh_enabled" not in st.session_state:
+    st.session_state.auto_refresh_enabled = False
+if "tg_push_enabled" not in st.session_state:
+    st.session_state.tg_push_enabled = False 
+if "scheduled_push_enabled" not in st.session_state:
+    st.session_state.scheduled_push_enabled = True 
+if "processed_time_slots" not in st.session_state:
+    st.session_state.processed_time_slots = set() 
+if "stock_groups" not in st.session_state:
+    st.session_state.stock_groups = load_stock_groups()
+if "group_editor_unlocked" not in st.session_state:
+    st.session_state.group_editor_unlocked = False
+if "editing_mode" not in st.session_state:
+    st.session_state.editing_mode = False
+if "fubon_sdk" not in st.session_state:
+    st.session_state.fubon_sdk = None
+if "fubon_logged_in" not in st.session_state:
+    st.session_state.fubon_logged_in = False
+if "selected_group_editor" not in st.session_state:
+    group_names_init = list(st.session_state.stock_groups.keys())
+    st.session_state.selected_group_editor = group_names_init[0] if group_names_init else ""
+if "rename_group_input" not in st.session_state:
+    st.session_state.rename_group_input = st.session_state.selected_group_editor
+if "symbols_text_area" not in st.session_state:
+    selected = st.session_state.selected_group_editor
+    st.session_state.symbols_text_area = "\n".join(st.session_state.stock_groups.get(selected, []))
+if "quick_add_symbol_input" not in st.session_state:
+    st.session_state.quick_add_symbol_input = ""
+if "notified_stocks" not in st.session_state:
+    st.session_state.notified_stocks = set()
+if "tg_last_update_id" not in st.session_state:
+    st.session_state.tg_last_update_id = None
+if "_next_selected_group" in st.session_state:
+    pending_group = st.session_state._next_selected_group
+    del st.session_state._next_selected_group
+    if pending_group in st.session_state.stock_groups:
+        st.session_state.selected_group_editor = pending_group
+        st.session_state.rename_group_input = pending_group
+        st.session_state.symbols_text_area = "\n".join(st.session_state.stock_groups.get(pending_group, []))
+
 # ===== CSS =====
 st.markdown("""
 <style>
@@ -80,18 +133,6 @@ st.markdown("""
 .back-to-dashboard-btn:hover { background: #eaeaea; }
 </style>
 """, unsafe_allow_html=True)
-
-# ===== 分組讀寫 =====
-def load_stock_groups():
-    if os.path.exists(GROUPS_FILE):
-        try:
-            with open(GROUPS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict) and data:
-                return data
-        except Exception:
-            pass
-    return copy.deepcopy(DEFAULT_STOCK_GROUPS)
 
 def save_stock_groups(groups):
     with open(GROUPS_FILE, "w", encoding="utf-8") as f:
@@ -149,7 +190,7 @@ def check_telegram_push_command():
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
     params = {"timeout": 1} 
     
-    if "tg_last_update_id" in st.session_state and st.session_state.tg_last_update_id:
+    if st.session_state.tg_last_update_id:
         params["offset"] = st.session_state.tg_last_update_id + 1
 
     try:
@@ -170,7 +211,7 @@ def check_telegram_push_command():
                     if message_text == "push":
                         triggered = True
                 return triggered
-    except Exception as e:
+    except Exception:
         pass
     return False
 
@@ -296,10 +337,7 @@ def normalize_symbols_from_text(text: str):
     text = text.replace("，", ",")
     lines = []
     for raw_line in text.splitlines():
-        raw_line = raw_line.strip()
-        if not raw_line:
-            continue
-        parts = [p.strip().upper() for p in raw_line.split(",") if p.strip()]
+        parts = [p.strip().upper() for p in raw_line.strip().split(",") if p.strip()]
         lines.extend(parts)
     seen = set()
     result = []
@@ -374,7 +412,6 @@ def compact_name_list(names, max_show=3):
         return "、".join(names)
     return "、".join(names[:max_show]) + f" 等{len(names)}檔"
 
-# 👉 剛才遺漏的三個狀態控制函式補在這裡
 def set_next_selected_group(group_name: str):
     st.session_state._next_selected_group = group_name
 
@@ -383,66 +420,6 @@ def enter_edit_mode():
 
 def leave_edit_mode():
     st.session_state.editing_mode = False
-
-# ===== Session State 初始化 =====
-if "auto_refresh_enabled" not in st.session_state:
-    st.session_state.auto_refresh_enabled = False
-
-if "tg_push_enabled" not in st.session_state:
-    st.session_state.tg_push_enabled = False 
-
-if "scheduled_push_enabled" not in st.session_state:
-    st.session_state.scheduled_push_enabled = True 
-
-if "processed_time_slots" not in st.session_state:
-    st.session_state.processed_time_slots = set() 
-
-if "stock_groups" not in st.session_state:
-    st.session_state.stock_groups = load_stock_groups()
-
-if "group_editor_unlocked" not in st.session_state:
-    st.session_state.group_editor_unlocked = False
-
-if "editing_mode" not in st.session_state:
-    st.session_state.editing_mode = False
-
-if "fubon_sdk" not in st.session_state:
-    st.session_state.fubon_sdk = None
-
-if "fubon_logged_in" not in st.session_state:
-    st.session_state.fubon_logged_in = False
-
-if "selected_group_editor" not in st.session_state:
-    group_names_init = list(st.session_state.stock_groups.keys())
-    st.session_state.selected_group_editor = group_names_init[0] if group_names_init else ""
-
-if "rename_group_input" not in st.session_state:
-    st.session_state.rename_group_input = st.session_state.selected_group_editor
-
-if "symbols_text_area" not in st.session_state:
-    selected = st.session_state.selected_group_editor
-    st.session_state.symbols_text_area = "\n".join(
-        st.session_state.stock_groups.get(selected, [])
-    )
-
-if "quick_add_symbol_input" not in st.session_state:
-    st.session_state.quick_add_symbol_input = ""
-
-if "notified_stocks" not in st.session_state:
-    st.session_state.notified_stocks = set()
-
-if "tg_last_update_id" not in st.session_state:
-    st.session_state.tg_last_update_id = None
-
-if "_next_selected_group" in st.session_state:
-    pending_group = st.session_state._next_selected_group
-    del st.session_state._next_selected_group
-    if pending_group in st.session_state.stock_groups:
-        st.session_state.selected_group_editor = pending_group
-        st.session_state.rename_group_input = pending_group
-        st.session_state.symbols_text_area = "\n".join(
-            st.session_state.stock_groups.get(pending_group, [])
-        )
 
 def sync_editor_fields_from_selected_group():
     groups = st.session_state.stock_groups
@@ -471,7 +448,7 @@ def render_fubon_login():
             st.rerun()
         return
 
-    # 嘗試從 Secrets 讀取憑證檔案 (現在只需要讀取 Base64 字串)
+    # 嘗試從 Secrets 讀取憑證檔案
     try:
         fubon_secrets = st.secrets["fubon"]
         pfx_base64 = fubon_secrets["pfx_base64"]
