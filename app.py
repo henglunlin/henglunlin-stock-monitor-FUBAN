@@ -31,7 +31,7 @@ GROUPS_FILE = "stock_groups.json"
 BACKUP_DIR = "backups"
 STOCK_NAME_FILE = "TWstocklistname.txt"
 
-# ===== Telegram 設定 =====
+# ===== Telegram 設定（請替換為你的資訊）=====
 TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")  
 
@@ -81,7 +81,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ===== 檔案讀寫工具 =====
+# ===== 分組讀寫 =====
 def load_stock_groups():
     if os.path.exists(GROUPS_FILE):
         try:
@@ -283,7 +283,8 @@ def get_stock_name(symbol: str, _sdk) -> str:
 
 # ===== 輔助工具函式 =====
 def make_anchor_id(group_name: str) -> str:
-    return f"group-{re.sub(r'[^0-9A-Za-z\u4e00-\u9fff]+', '-', group_name).strip('-')}"
+    anchor = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", group_name).strip("-")
+    return f"group-{anchor}"
 
 def yahoo_quote_url(symbol: str) -> str:
     fubon_symbol = str(symbol).split(".")[0]
@@ -295,7 +296,10 @@ def normalize_symbols_from_text(text: str):
     text = text.replace("，", ",")
     lines = []
     for raw_line in text.splitlines():
-        parts = [p.strip().upper() for p in raw_line.strip().split(",") if p.strip()]
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        parts = [p.strip().upper() for p in raw_line.split(",") if p.strip()]
         lines.extend(parts)
     seen = set()
     result = []
@@ -369,6 +373,16 @@ def compact_name_list(names, max_show=3):
     if len(names) <= max_show:
         return "、".join(names)
     return "、".join(names[:max_show]) + f" 等{len(names)}檔"
+
+# 👉 剛才遺漏的三個狀態控制函式補在這裡
+def set_next_selected_group(group_name: str):
+    st.session_state._next_selected_group = group_name
+
+def enter_edit_mode():
+    st.session_state.editing_mode = True
+
+def leave_edit_mode():
+    st.session_state.editing_mode = False
 
 # ===== Session State 初始化 =====
 if "auto_refresh_enabled" not in st.session_state:
