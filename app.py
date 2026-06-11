@@ -6,7 +6,6 @@ import time
 import gc
 import requests
 import base64
-import threading
 from html import escape
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -64,56 +63,6 @@ DEFAULT_STOCK_GROUPS = {
         "3081.TWO", "3450.TW", "6442.TW"
     ],
 }
-
-# ===== WebSocket 全域資源設定 =====
-@st.cache_resource
-def get_ws_cache():
-    """確保 Streamlit 重刷時，背景接收的價格不會被清空"""
-    return {}
-
-@st.cache_resource
-def get_ws_status():
-    """追蹤 WebSocket 執行緒是否已啟動"""
-    return {"started": False}
-
-GLOBAL_WS_PRICES = get_ws_cache()
-WS_STATUS = get_ws_status()
-
-def on_ws_message(message):
-    """處理富邦 WebSocket 即時回傳的訊息"""
-    try:
-        data = json.loads(message)
-        if "data" in data and isinstance(data["data"], dict):
-            quote = data["data"]
-            symbol = quote.get("symbol")
-            # 抓取成交價
-            price = quote.get("tradePrice") or quote.get("closePrice") or quote.get("price")
-            
-            if symbol and price:
-                GLOBAL_WS_PRICES[symbol] = float(price)
-    except Exception:
-        pass
-
-def start_fubon_websocket(sdk, symbols):
-    """啟動 WebSocket 並訂閱股票"""
-    if WS_STATUS["started"]:
-        return
-
-    try:
-        sdk.marketdata.websocket_client.on('message', on_ws_message)
-        sdk.marketdata.websocket_client.connect()
-        
-        for symbol in symbols:
-            fubon_symbol = str(symbol).split(".")[0]
-            sdk.marketdata.websocket_client.subscribe({
-                'channel': 'trades',
-                'symbol': fubon_symbol
-            })
-            
-        WS_STATUS["started"] = True
-        print("✅ WebSocket 即時行情訂閱成功！")
-    except Exception as e:
-        print(f"❌ WebSocket 連線失敗: {e}")
 
 # ===== 檔案讀寫工具 =====
 def load_stock_groups():
@@ -266,8 +215,8 @@ def check_telegram_push_command():
         pass
     return False
 
-# ===== Fubon API 行情工具 =====
-@st.cache_data(ttl=3600) # 💡 將 K 線快取改為 1 小時，避免盤中不斷重新拉歷史資料
+# ===== Fubon API 行情工具 (加入自動重試機制) =====
+@st.cache_data(ttl=REFRESH_SEC)
 def download_stock_data(symbol: str, _sdk):
     """取得歷史日 K 線資料"""
     if _sdk is None:
@@ -318,18 +267,30 @@ def normalize_ohlc(df):
     return pd.DataFrame()
 
 def get_last_price(symbol, df, _sdk):
-    """直接從 WebSocket 全域快取讀取即時報價"""
+    """優先透過 snapshot 取得即時報價，若無則退回 K 線最新收盤價"""
     fubon_symbol = str(symbol).split(".")[0]
     
-    # 1. 優先拿 WebSocket 的即時資料（瞬間完成讀取）
-    if fubon_symbol in GLOBAL_WS_PRICES:
-        return GLOBAL_WS_PRICES[fubon_symbol]
+    if _sdk is not None:
+        for attempt in range(3):  # 最多重試 3 次
+            try:
+                res = _sdk.marketdata.rest_client.stock.snapshot.quotes(symbol=fubon_symbol)
+                if res and "data" in res and len(res["data"]) > 0:
+                    quote = res["data"][0]
+                    price = quote.get("closePrice") or quote.get("tradePrice") or quote.get("close")
+                    if price is not None and pd.notna(price):
+                        return float(price)
+                break  # 沒報錯但沒資料，就跳出嘗試用 K 線
+            except Exception as e:
+                error_msg = str(e)
+                if "429" in error_msg or "Rate limit" in error_msg:
+                    time.sleep(1.0)
+                    continue
+                break
 
-    # 2. 如果剛啟動 WS 還沒推播資料，退回使用歷史 K 線的最後一筆收盤價
     if not df.empty and "Close" in df.columns:
         return float(df["Close"].iloc[-1])
         
-    raise ValueError("無法取得即時價格 (WebSocket 尚未推播)")
+    raise ValueError("無法取得即時價格")
 
 @st.cache_data(ttl=86400)
 def load_stock_name_map(file_path: str = STOCK_NAME_FILE) -> dict:
@@ -494,8 +455,6 @@ def render_fubon_login():
         if st.sidebar.button("登出 / 重新連線", width="stretch"):
             st.session_state.fubon_sdk = None
             st.session_state.fubon_logged_in = False
-            # 關閉連線時，重設 WS 狀態以允許下次登入重連
-            WS_STATUS["started"] = False 
             st.rerun()
         return
 
@@ -528,19 +487,6 @@ def render_fubon_login():
                     st.session_state.fubon_logged_in = True
                     
                 st.sidebar.success("✅ 富邦 API 連線成功！")
-
-                # 💡 啟動 WebSocket：收集所有股票並放進背景執行緒
-                all_symbols = set()
-                for stocks in st.session_state.stock_groups.values():
-                    all_symbols.update(stocks)
-                
-                ws_thread = threading.Thread(
-                    target=start_fubon_websocket, 
-                    args=(sdk, list(all_symbols)), 
-                    daemon=True
-                )
-                ws_thread.start()
-
                 st.rerun()
                 
             except Exception as e:
@@ -954,7 +900,8 @@ for group_name, stocks in st.session_state.stock_groups.items():
 
     for symbol in stocks:
         try:
-            # 💡 已移除強制延遲 time.sleep(1.0)，大幅提高讀取速度
+            # 💡 加入短暫延遲，避免密集呼叫導致富邦 API Rate limit exceeded (429 錯誤)
+            time.sleep(1.0)
             
             # 💡 安全地拿取 sdk，避免發生 AttributeError
             current_sdk = st.session_state.get("fubon_sdk", None)
