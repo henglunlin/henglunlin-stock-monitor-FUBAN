@@ -24,7 +24,7 @@ except ImportError:
 st.set_page_config(layout="wide")
 
 # ===== 常數設定 =====
-REFRESH_SEC = 30
+REFRESH_SEC = 60
 ENABLE_GAP_SIGNAL = True
 GROUP_EDIT_PIN = "1219"
 GROUPS_FILE = "stock_groups.json"
