@@ -634,27 +634,48 @@ if not st.session_state.fubon_logged_in:
     st.warning("⚠️ 請先至左側面板連線「富邦 API」，才能開始抓取行情資料。")
     st.stop()
 
-# 推播判定邏輯
+# ===== 推送時間與手動指令邏輯判斷 =====
 can_push_now = False
 current_schedule_key = None
 manual_push_triggered = False
 
 if st.session_state.tg_push_enabled:
+    # 偷偷去問 Telegram 有沒有收到 push 指令
     manual_push_triggered = check_telegram_push_command()
+    
     if manual_push_triggered:
         can_push_now = True
-        st.session_state.notified_stocks.clear()
+        st.session_state.notified_stocks = set() # 清空今日已通知紀錄，強制重發
         st.toast("🚀 收到 'push' 指令，強制觸發推播！")
         send_telegram_message("🤖 <b>收到指令，開始為您掃描並強制推播強勢股...</b>")
     elif st.session_state.scheduled_push_enabled:
-        TARGET_TIMES = [tw_now.replace(hour=h, minute=m, second=0, microsecond=0) 
-                        for h, m in [(9,40), (10,0), (11,0), (12,0), (13,0)]]
+        # 定義每天的目標發送時間
+        TARGET_TIMES = [
+            tw_now.replace(hour=9, minute=40, second=0, microsecond=0),
+            tw_now.replace(hour=10, minute=0, second=0, microsecond=0),
+            tw_now.replace(hour=11, minute=0, second=0, microsecond=0),
+            tw_now.replace(hour=12, minute=0, second=0, microsecond=0),
+            tw_now.replace(hour=13, minute=0, second=0, microsecond=0)
+        ]
+
         for target_dt in TARGET_TIMES:
-            if abs((tw_now - target_dt).total_seconds()) <= 45:
-                current_schedule_key = f"slot_{tw_now.strftime('%Y%m%d')}_{target_dt.strftime('%H%M')}"
+            # 計算當下時間與目標時間的差距（秒）
+            diff_seconds = (tw_now - target_dt).total_seconds()
+            
+            # 若時間差距在正負 60 秒以內
+            if abs(diff_seconds) <= 45:
+                # 產生唯一的排程 Key，例如 slot_20260609_0940
+                time_str = target_dt.strftime("%H%M")
+                today_str = tw_now.strftime("%Y%m%d")
+                current_schedule_key = f"slot_{today_str}_{time_str}"
+                
+                # 檢查該時段今天是否已經觸發過
                 if current_schedule_key not in st.session_state.processed_time_slots:
                     can_push_now = True
-                    break
+                    break  # 條件符合就跳出迴圈
+    else:
+        # 修正：關閉排程時不應預設推播，否則 Streamlit 重刷就會一直送訊息
+        can_push_now = False
 
 # 資料抓取與統計迴圈
 group_tables = {}
