@@ -1080,7 +1080,7 @@ def render_stock_group_editor():
 # =============================================================================
 # 主畫面
 # =============================================================================
-st.title("📊 股票監控面板 - yfinance歷史 + 富邦WebSocket當日價")
+st.title("📊 股票監控面板 - 告訴我你會買日月光")
 st.markdown('<div id="dashboard-top"></div>', unsafe_allow_html=True)
 
 col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
