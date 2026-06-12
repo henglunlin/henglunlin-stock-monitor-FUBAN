@@ -580,25 +580,53 @@ def normalize_ohlc(df):
     return pd.DataFrame()
 
 
+
+
+def is_fubon_realtime_time():
+    """
+    富邦 WebSocket 即時成交價使用時間。
+
+    規則：
+    - 09:00 <= 現在時間 < 13:30：優先使用富邦 WebSocket trades。
+    - 13:30 後：不再使用 WebSocket 價格，改用 yfinance fallback / history fallback。
+    """
+    now = datetime.now(TW_TZ).time()
+    start = datetime.strptime("09:00", "%H:%M").time()
+    end = datetime.strptime("13:30", "%H:%M").time()
+    return start <= now < end
+
 def get_last_price(symbol, df, manager=None):
-    """當日股價優先使用富邦 WebSocket；未收到時才 fallback。"""
-    if manager is not None:
+    """
+    價格來源邏輯：
+    - 09:00 ~ 13:30 前：優先使用富邦 WebSocket trades。
+    - 13:30 後：直接改用 yfinance fallback / history fallback，不再使用 WebSocket 最後一筆。
+
+    這樣可以避免盤後 WebSocket 只剩 subscribed/system 訊息，或沿用盤中最後一筆價格造成誤判。
+    """
+    use_fubon_ws = is_fubon_realtime_time()
+
+    if manager is not None and use_fubon_ws:
         ws_price = manager.get_price(symbol)
         if ws_price is not None and pd.notna(ws_price):
-            return float(ws_price), "Fubon WebSocket"
+            return float(ws_price), "Fubon WebSocket trades"
 
-    # 備援：若尚未收到 WebSocket，使用 yfinance fast_info。
+    # 13:30 後，或 WebSocket 尚未收到成交價時，改用 yfinance fast_info。
     try:
         for yf_symbol in build_yfinance_candidates(symbol):
             ticker = yf.Ticker(yf_symbol)
             price = ticker.fast_info.get("last_price", None)
             if price is not None and pd.notna(price):
-                return float(price), "yfinance fallback"
+                if use_fubon_ws:
+                    return float(price), "yfinance fallback"
+                return float(price), "yfinance after 13:30"
     except Exception:
         pass
 
+    # 最後 fallback：使用 yfinance 歷史 K 最後一筆 Close。
     if not df.empty and "Close" in df.columns:
-        return float(df["Close"].iloc[-1]), "history fallback"
+        if use_fubon_ws:
+            return float(df["Close"].iloc[-1]), "history fallback"
+        return float(df["Close"].iloc[-1]), "history after 13:30"
 
     raise ValueError("無法取得即時價格")
 
@@ -1245,6 +1273,12 @@ with st.sidebar.expander("📡 富邦 WebSocket 狀態", expanded=True):
         st.caption(f"最後資料：{status['last_message_at'].strftime('%H:%M:%S')}")
     if status["error"]:
         st.warning(status["error"])
+
+with st.sidebar.expander("🕒 價格來源模式", expanded=False):
+    if is_fubon_realtime_time():
+        st.success("目前價格模式：09:00~13:30，優先使用富邦 WebSocket trades")
+    else:
+        st.info("目前價格模式：13:30 後，改用 yfinance / history fallback")
 
 # ===== 推送時間與手動指令邏輯判斷 =====
 can_push_now = False
