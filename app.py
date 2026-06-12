@@ -431,11 +431,17 @@ def download_stock_data(symbol: str, _sdk):
 
 
 def normalize_ohlc(df):
+    """保留 Date 欄位，讓 compute_indicators 可以判斷日 K 最後一筆是否為今日。"""
     if df is None or df.empty:
         return pd.DataFrame()
+
     required_cols = ["Open", "High", "Low", "Close", "Volume"]
     if set(required_cols).issubset(df.columns):
-        return df[required_cols].copy()
+        keep_cols = required_cols.copy()
+        if "Date" in df.columns:
+            keep_cols = ["Date"] + keep_cols
+        return df[keep_cols].copy()
+
     return pd.DataFrame()
 
 
@@ -528,23 +534,57 @@ def get_stock_name(symbol: str, _sdk=None) -> str:
 # 指標與 UI 格式
 # =============================================================================
 def compute_indicators(df, price):
+    """
+    計算即時價格對應的漲跌幅、MA、KD、跳空訊號。
+
+    重要修正：
+    - WebSocket price 是盤中即時價。
+    - historical.candles 的最後一筆通常是「昨收」，不是今日盤中價。
+    - 如果 historical.candles 最後一筆 Date 是今天，才使用倒數第二筆當昨收。
+    - 如果 historical.candles 最後一筆 Date 不是今天，使用最後一筆 Close 當昨收。
+    """
     if df is None or df.empty:
         raise ValueError("下載資料為空")
     if len(df) < 20:
         raise ValueError("歷史資料不足（至少需要 20 筆）")
 
-    close = pd.to_numeric(df["Close"].squeeze(), errors="coerce")
-    low = pd.to_numeric(df["Low"].squeeze(), errors="coerce")
-    high = pd.to_numeric(df["High"].squeeze(), errors="coerce")
+    calc_df = df.copy().reset_index(drop=True)
+
+    close = pd.to_numeric(calc_df["Close"].squeeze(), errors="coerce")
+    low = pd.to_numeric(calc_df["Low"].squeeze(), errors="coerce")
+    high = pd.to_numeric(calc_df["High"].squeeze(), errors="coerce")
     if close.isna().all() or low.isna().all() or high.isna().all():
         raise ValueError("OHLC 資料格式異常")
 
-    yesterday_close = float(close.iloc[-1])
+    price_val = float(price)
+
+    # 判斷日 K 最後一筆是不是今天。
+    # 若最後一筆是今天，代表日 K 已包含今日資料，昨收應為倒數第二筆。
+    # 若最後一筆不是今天，代表最後一筆本身就是最近完整交易日收盤價，也就是昨收。
+    last_row_is_today = False
+    if "Date" in calc_df.columns:
+        try:
+            last_date = pd.to_datetime(calc_df["Date"].iloc[-1]).date()
+            today = datetime.now(TW_TZ).date()
+            last_row_is_today = last_date == today
+        except Exception:
+            last_row_is_today = False
+
+    if last_row_is_today:
+        if len(close) < 2:
+            raise ValueError("昨收資料不足")
+        yesterday_close = float(close.iloc[-2])
+        yesterday_high = float(high.iloc[-2])
+    else:
+        yesterday_close = float(close.iloc[-1])
+        yesterday_high = float(high.iloc[-1])
+
     if pd.isna(yesterday_close) or yesterday_close == 0:
         raise ValueError("昨收資料異常")
 
-    price_val = float(price)
     change_pct = float((price_val / yesterday_close - 1) * 100)
+
+    # MA / KD 使用歷史日 K。若你之後想讓 MA/KD 也盤中即時，可再把 price_val append 成今日 Close。
     ma5 = float(close.tail(5).mean())
     ma10 = float(close.tail(10).mean())
     ma20 = float(close.tail(20).mean())
@@ -593,15 +633,21 @@ def compute_indicators(df, price):
     else:
         kd_signal = "-"
 
+    # 跳空判斷：
+    # 若 Date 最後一筆是今天，可用日 K 今日 low；否則盤中最低價尚未接入，先使用即時價作保守替代。
     gap_signal = "-"
-    today_low = float(low.iloc[-1])
-    yesterday_high = float(high.iloc[-2])
+    if last_row_is_today:
+        today_low = float(low.iloc[-1])
+    else:
+        today_low = price_val
+
     if ENABLE_GAP_SIGNAL and pd.notna(today_low) and pd.notna(yesterday_high) and today_low > yesterday_high:
         gap_signal = "跳空"
 
     return {
         "price": round(price_val, 2),
         "pct": round(change_pct, 2),
+        "yesterday_close": round(yesterday_close, 2),
         "ma_range": ma_range,
         "ma_trend": ma_trend,
         "k": round(k_t, 1),
@@ -609,7 +655,6 @@ def compute_indicators(df, price):
         "kd_signal": kd_signal,
         "gap_signal": gap_signal,
     }
-
 
 def format_color(val):
     if isinstance(val, (int, float)):
@@ -1132,6 +1177,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "代碼網址": yahoo_quote_url(symbol),
                 "股票名稱": stock_name,
                 "價格": f"{data['price']:.2f}",
+                "昨收": f"{data['yesterday_close']:.2f}",
                 "漲跌%": data["pct"],
                 "MA位置": data["ma_range"],
                 "MA排列": data["ma_trend"],
@@ -1148,6 +1194,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "代碼網址": "",
                 "股票名稱": get_stock_name(symbol, manager.sdk),
                 "價格": "錯誤",
+                "昨收": "-",
                 "漲跌%": "-",
                 "MA位置": "-",
                 "MA排列": "-",
@@ -1198,7 +1245,7 @@ for group_name, info in group_tables.items():
     if not table_df.empty and "代碼網址" in table_df.columns:
         table_df["代碼"] = table_df["代碼網址"]
 
-    display_columns = ["代碼", "股票名稱", "價格", "漲跌%", "MA位置", "MA排列", "K值", "D值", "KD訊號", "跳空訊號", "價格來源"]
+    display_columns = ["代碼", "股票名稱", "價格", "昨收", "漲跌%", "MA位置", "MA排列", "K值", "D值", "KD訊號", "跳空訊號", "價格來源"]
     st.dataframe(
         table_df[display_columns],
         use_container_width=True,
