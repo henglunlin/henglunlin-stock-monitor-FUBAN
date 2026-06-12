@@ -15,6 +15,7 @@ from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import yfinance as yf
 import streamlit as st
 
 # ===== 富邦 API 引入 =====
@@ -392,42 +393,68 @@ class FubonRealtimeManager:
 # Fubon REST / 資料函式
 # =============================================================================
 @st.cache_data(ttl=HISTORY_CACHE_TTL)
-def download_stock_data(symbol: str, _sdk):
-    """取得歷史日 K 線資料。注意：此函式只拿來算 MA/KD/昨收，不拿來當即時價。"""
-    if _sdk is None:
-        raise ValueError("富邦 API 尚未連線")
+def download_stock_data(symbol: str, _sdk=None):
+    """
+    用 yfinance 取得「今日以前」的歷史日 K。
 
-    code = symbol_to_code(symbol)
-    end_date = date.today()
-    start_date = end_date - timedelta(days=90)
-
+    設計原則：
+    - 當日即時價格：仍由富邦 WebSocket / snapshot 負責。
+    - 今日以前歷史資料：全部改用 yfinance。
+    - 若 yfinance 回傳今日尚未收盤的日 K，會移除今日資料，避免昨收與 MA/KD 被今日盤中價污染。
+    """
     try:
-        res = _sdk.marketdata.rest_client.stock.historical.candles(**{
-            "symbol": code,
-            "from": start_date.strftime("%Y-%m-%d"),
-            "to": end_date.strftime("%Y-%m-%d"),
-            "timeframe": "D",
-            "fields": "open,high,low,close,volume",
-        })
-        if res and "data" in res and isinstance(res["data"], list):
-            df = pd.DataFrame(res["data"])
-            if not df.empty:
-                df.rename(columns={
-                    "open": "Open",
-                    "high": "High",
-                    "low": "Low",
-                    "close": "Close",
-                    "volume": "Volume",
-                    "date": "Date",
-                }, inplace=True)
-                if "Date" in df.columns:
-                    df = df.sort_values("Date").reset_index(drop=True)
-                for col in ["Open", "High", "Low", "Close", "Volume"]:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-                return df
+        raw = yf.download(
+            symbol,
+            period="3mo",
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            threads=False,
+        )
     except Exception as e:
-        print(f"富邦 API 抓取 {code} 歷史 K 線失敗: {e}")
-    return pd.DataFrame()
+        print(f"yfinance 抓取 {symbol} 歷史 K 線失敗: {e}")
+        return pd.DataFrame()
+
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+
+    df = raw.copy()
+
+    # yfinance 有時會回傳 MultiIndex columns，這裡轉成單層欄位。
+    if isinstance(df.columns, pd.MultiIndex):
+        # 常見格式：('Close', '2330.TW')，取第一層 OHLCV 名稱。
+        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+
+    required_cols = ["Open", "High", "Low", "Close", "Volume"]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        print(f"yfinance {symbol} 缺少欄位: {missing}")
+        return pd.DataFrame()
+
+    df = df.reset_index()
+
+    # Date 欄位名稱可能是 Date 或 Datetime。
+    date_col = "Date" if "Date" in df.columns else "Datetime" if "Datetime" in df.columns else df.columns[0]
+    df = df.rename(columns={date_col: "Date"})
+
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df = df.dropna(subset=["Date"])
+
+    # 移除今日資料：目前價格由 WebSocket 即時價處理；歷史資料只保留今日以前。
+    today = datetime.now(TW_TZ).date()
+    df = df[df["Date"].dt.date < today]
+
+    if df.empty:
+        return pd.DataFrame()
+
+    df = df.sort_values("Date").reset_index(drop=True)
+
+    for col in required_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.dropna(subset=["Open", "High", "Low", "Close"])
+
+    return df[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
 
 
 def normalize_ohlc(df):
@@ -515,20 +542,31 @@ def load_stock_name_map(file_path: str = STOCK_NAME_FILE) -> dict:
 
 @st.cache_data(ttl=86400)
 def get_stock_name(symbol: str, _sdk=None) -> str:
+    """
+    股票名稱來源：
+    1. 優先讀 TWstocklistname.txt
+    2. 再用 yfinance 的 shortName / longName
+    3. 最後回傳股票代碼
+    """
     code = symbol_to_code(symbol)
     name_map = load_stock_name_map(STOCK_NAME_FILE)
+
     if symbol in name_map:
         return name_map[symbol]
     if code in name_map:
         return name_map[code]
+
     try:
-        if _sdk is not None:
-            res = _sdk.marketdata.rest_client.stock.historical.stats(symbol=code)
-            if res and "name" in res:
-                return res["name"].strip()
+        info = yf.Ticker(symbol).get_info()
+        for key in ["shortName", "longName", "displayName", "name"]:
+            val = info.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
     except Exception:
         pass
+
     return code
+
 
 # =============================================================================
 # 指標與 UI 格式
@@ -1026,7 +1064,7 @@ def render_stock_group_editor():
 # =============================================================================
 # 主畫面
 # =============================================================================
-st.title("📊 股票監控面板 - 富邦 WebSocket 即時版")
+st.title("📊 股票監控面板 - 富邦即時價 + yfinance歷史")
 st.markdown('<div id="dashboard-top"></div>', unsafe_allow_html=True)
 
 if FubonSDK is None:
@@ -1068,7 +1106,7 @@ st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
 rise_threshold = st.slider("儀表板漲幅達標門檻 (%)", min_value=5, max_value=9, value=5, step=1)
 
 if not st.session_state.fubon_logged_in:
-    st.warning("⚠️ 請先至左側面板連線「富邦 API」，才能開始抓取 WebSocket 即時行情資料。")
+    st.warning("⚠️ 請先至左側面板連線「富邦 API」，才能抓取當日即時價；今日以前歷史資料由 yfinance 取得。")
     st.stop()
 
 manager: FubonRealtimeManager = st.session_state.fubon_manager
