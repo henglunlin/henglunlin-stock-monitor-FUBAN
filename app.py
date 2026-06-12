@@ -590,8 +590,8 @@ def is_fubon_realtime_time():
     - 13:30 後：改用 yfinance fast_info / 歷史 Close，不再使用 WebSocket 最後一筆。
     """
     now = datetime.now(TW_TZ).time()
-    start = datetime.strptime("09:00", "%H:%M").time()
-    end = datetime.strptime("13:30", "%H:%M").time()
+    start = datetime.strptime("08:00", "%H:%M").time()
+    end = datetime.strptime("13:35", "%H:%M").time()
     return start <= now < end
 
 def get_last_price(symbol, df, manager=None):
@@ -719,8 +719,8 @@ def compute_indicators(df, price):
         raise ValueError("OHLC 資料格式異常")
 
     # yfinance 已排除今日，所以最後一筆就是昨收。
-    yesterday_close = float(close.iloc[-1])
-    yesterday_high = float(high.iloc[-1])
+    yesterday_close = float(close.iloc[-2])
+    yesterday_high = float(high.iloc[-2])
     if pd.isna(yesterday_close) or yesterday_close == 0:
         raise ValueError("昨收資料異常")
 
