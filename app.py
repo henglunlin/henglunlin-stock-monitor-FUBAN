@@ -234,7 +234,7 @@ def get_last_price(symbol, df, _sdk):
             res = _sdk.marketdata.rest_client.stock.snapshot.quotes(symbol=fubon_symbol)
             if res and "data" in res and len(res["data"]) > 0:
                 quote = res["data"][0]
-                price = quote.get("closePrice") or quote.get("tradePrice") or quote.get("close")
+                price = quote.get("tradePrice") or quote.get("lastPrice") or quote.get("price") or quote.get("close") or quote.get("closePrice")
                 if price is not None and pd.notna(price):
                     return float(price)
         except Exception:
