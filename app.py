@@ -80,153 +80,17 @@ DEFAULT_STOCK_GROUPS = {
 # ===== CSS =====
 st.markdown("""
 <style>
-/* ===== Responsive dashboard layout ===== */
-.dashboard-scroll {
-    overflow-x: visible;
-    overflow-y: visible;
-    width: 100%;
-    padding-bottom: 8px;
-}
-.dashboard-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 12px;
-    width: 100%;
-    min-width: 0;
-}
-.dashboard-card {
-    border-radius: 12px;
-    padding: 14px 16px;
-    min-height: 0;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-    box-sizing: border-box;
-    overflow: hidden;
-}
-.dashboard-title {
-    font-size: clamp(16px, 2.8vw, 18px);
-    font-weight: 700;
-    margin-bottom: 10px;
-    color: #000000 !important;
-    line-height: 1.25;
-    word-break: keep-all;
-}
-.dashboard-main {
-    font-size: clamp(24px, 5vw, 28px);
-    font-weight: 800;
-    margin-bottom: 6px;
-    line-height: 1.15;
-}
-.dashboard-sub {
-    font-size: clamp(12px, 2.6vw, 14px);
-    color: #000000 !important;
-    margin-bottom: 10px;
-    line-height: 1.45;
-    overflow-wrap: anywhere;
-}
-.dashboard-detail {
-    font-size: clamp(12px, 2.6vw, 14px);
-    line-height: 1.6;
-    color: #000000 !important;
-    overflow-wrap: anywhere;
-}
-.dashboard-detail-line {
-    display: block;
-    margin-bottom: 2px;
-}
-.dashboard-extra {
-    font-size: clamp(12px, 2.5vw, 13px);
-    line-height: 1.45;
-    color: #000000 !important;
-    margin-top: 10px;
-    padding-top: 8px;
-    border-top: 1px solid rgba(0,0,0,0.12);
-    overflow-wrap: normal;
-    word-break: keep-all;
-    font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
-}
-.top-stock-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-.top-stock-row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 8px;
-    white-space: normal;
-    min-width: 0;
-}
-.top-stock-name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: #000000;
-}
-.top-stock-pct {
-    flex: 0 0 auto;
-    font-weight: 700;
-    white-space: nowrap;
-}
-.dashboard-link,
-.dashboard-link:link,
-.dashboard-link:visited,
-.dashboard-link:hover,
-.dashboard-link:active {
-    text-decoration: none !important;
-    color: inherit !important;
-}
-.back-to-dashboard-btn {
-    display: inline-block;
-    padding: 6px 12px;
-    border-radius: 8px;
-    border: 1px solid #999;
-    background: #f5f5f5;
-    color: #000 !important;
-    text-decoration: none !important;
-    font-size: 14px;
-    font-weight: 600;
-    text-align: center;
-    font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
-}
+.dashboard-scroll { overflow-x: auto; overflow-y: hidden; width: 100%; padding-bottom: 8px; }
+.dashboard-grid { display: grid; grid-template-columns: repeat(4, minmax(260px, 1fr)); gap: 12px; min-width: 1120px; }
+.dashboard-card { border-radius: 12px; padding: 14px 16px; min-height: 180px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); box-sizing: border-box; }
+.dashboard-title { font-size: 18px; font-weight: 700; margin-bottom: 10px; color: #000000 !important; }
+.dashboard-main { font-size: 28px; font-weight: 800; margin-bottom: 6px; }
+.dashboard-sub { font-size: 14px; color: #000000 !important; margin-bottom: 10px; }
+.dashboard-detail { font-size: 14px; line-height: 1.7; color: #000000 !important; }
+.dashboard-extra { font-size: 13px; line-height: 1.6; color: #000000 !important; margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(0,0,0,0.12); word-break: break-word; }
+.dashboard-link, .dashboard-link:link, .dashboard-link:visited, .dashboard-link:hover, .dashboard-link:active { text-decoration: none !important; color: inherit !important; }
+.back-to-dashboard-btn { display: inline-block; padding: 6px 12px; border-radius: 8px; border: 1px solid #999; background: #f5f5f5; color: #000 !important; text-decoration: none !important; font-size: 14px; font-weight: 600; text-align: center; }
 .back-to-dashboard-btn:hover { background: #eaeaea; }
-.ws-ok { color:#389e0d; font-weight:700; }
-.ws-bad { color:#cf1322; font-weight:700; }
-
-/* Tablet: readable 2-column cards */
-@media (max-width: 1024px) {
-    .dashboard-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 10px;
-    }
-    .dashboard-card {
-        padding: 12px 14px;
-    }
-}
-
-/* Phone: single-column cards, no side-scroll, no character-by-character wrapping */
-@media (max-width: 640px) {
-    .dashboard-scroll {
-        overflow-x: hidden;
-    }
-    .dashboard-grid {
-        grid-template-columns: 1fr;
-        gap: 10px;
-    }
-    .dashboard-card {
-        padding: 12px 14px;
-        border-radius: 10px;
-    }
-    .top-stock-row {
-        align-items: flex-start;
-    }
-    .top-stock-name {
-        white-space: normal;
-        overflow: visible;
-        text-overflow: clip;
-    }
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1291,7 +1155,7 @@ def build_top3_html(valid_stock_stats):
     if not valid_stock_stats:
         return '<span style="color:#666666;">無可用資料</span>'
     top3_sorted = sorted(valid_stock_stats, key=lambda x: x["pct"], reverse=True)[:3]
-    rows = []
+    parts = []
     for item in top3_sorted:
         pct = float(item["pct"])
         if pct > 0:
@@ -1303,14 +1167,11 @@ def build_top3_html(valid_stock_stats):
         code_text = escape(str(item["code"]))
         name_text = escape(str(item["name"]))
         pct_text = f"{pct:+.1f}%"
-        rows.append(
-            '<div class="top-stock-row">'
-            f'<span class="top-stock-name">{code_text} {name_text}</span>'
-            f'<span class="top-stock-pct" style="color:{pct_color};">{pct_text}</span>'
-            '</div>'
+        parts.append(
+            f'<span style="color:#000000;">{code_text} {name_text} </span>'
+            f'<span style="color:{pct_color}; font-weight:600;">{pct_text}</span>'
         )
-    return '<div class="top-stock-list">' + ''.join(rows) + '</div>'
-
+    return " | ".join(parts)
 
 def render_summary_dashboard(group_up_summary, rise_threshold):
     st.markdown("### 📌 漲幅儀表板")
@@ -1327,13 +1188,12 @@ def render_summary_dashboard(group_up_summary, rise_threshold):
         down_count = item["下跌數"]
         hit_names_text = escape(str(item["達標股票名稱"]))
         top3_html = item["前三名HTML"]
+
         hit_ratio = (hit_count / total_count * 100) if total_count > 0 else 0
-        if hit_ratio >= 60:
-            bg_color = "#fff1f0"; border_color = "#ff7875"; accent_color = "#cf1322"
-        elif hit_ratio > 0:
-            bg_color = "#fff7e6"; border_color = "#ffa940"; accent_color = "#d46b08"
-        else:
-            bg_color = "#f6ffed"; border_color = "#95de64"; accent_color = "#389e0d"
+        if hit_ratio >= 60: bg_color = "#fff1f0"; border_color = "#ff7875"; accent_color = "#cf1322"
+        elif hit_ratio > 0: bg_color = "#fff7e6"; border_color = "#ffa940"; accent_color = "#d46b08"
+        else: bg_color = "#f6ffed"; border_color = "#95de64"; accent_color = "#389e0d"
+
         card_html = (
             f'<a href="#{anchor_id}" class="dashboard-link">'
             f'<div class="dashboard-card" style="background-color:{bg_color}; border:1px solid {border_color}; cursor:pointer;">'
@@ -1341,11 +1201,11 @@ def render_summary_dashboard(group_up_summary, rise_threshold):
             f'<div class="dashboard-main" style="color:{accent_color};">{hit_count} / {total_count}</div>'
             f'<div class="dashboard-sub">漲幅達標比例（≥{rise_threshold}%）：{hit_ratio:.0f}%</div>'
             f'<div class="dashboard-detail">'
-            f'<span class="dashboard-detail-line">🎯 達標：<b>{hit_count}</b> 檔（{hit_names_text}）</span>'
-            f'<span class="dashboard-detail-line">🔴 一般上漲：<b>{up_count}</b></span>'
-            f'<span class="dashboard-detail-line">🟢 下跌：<b>{down_count}</b></span>'
+            f'🎯 達標：<b>{hit_count}</b> 檔（{hit_names_text}）<br>'
+            f'🔴 一般上漲：<b>{up_count}</b><br>'
+            f'🟢 下跌：<b>{down_count}</b>'
             f'</div>'
-            f'<div class="dashboard-extra">&#9654; {top3_html}</div>'
+            f'<div class="dashboard-extra">▶ {top3_html}</div>'
             f'</div></a>'
         )
         html_parts.append(card_html)
