@@ -1303,6 +1303,12 @@ if "_next_selected_group" in st.session_state:
         st.session_state.selected_group_editor = pending_group
         st.session_state.rename_group_input = pending_group
         st.session_state.symbols_text_area = "\n".join(st.session_state.stock_groups.get(pending_group, []))
+if "_clear_quick_add_symbol_input" in st.session_state:
+    del st.session_state._clear_quick_add_symbol_input
+    st.session_state.quick_add_symbol_input = ""
+if "_quick_add_success_message" in st.session_state:
+    st.toast(st.session_state._quick_add_success_message)
+    del st.session_state._quick_add_success_message
 
 
 def set_next_selected_group(group_name: str):
@@ -1499,12 +1505,15 @@ def render_stock_group_editor():
                         groups[selected_group] = current_list
                         st.session_state.stock_groups = groups
                         save_stock_groups(groups)
-                        st.session_state.symbols_text_area = "\n".join(current_list)
-                        st.session_state.quick_add_symbol_input = ""
+                        # 注意：不能在 widget 建立後直接改 symbols_text_area / quick_add_symbol_input，
+                        # 否則 Streamlit 會丟 StreamlitAPIException。
+                        # 先記錄 pending 狀態，下一次 rerun 在 widget 建立前同步欄位。
+                        set_next_selected_group(selected_group)
+                        st.session_state._clear_quick_add_symbol_input = True
                         if stock_name_for_msg:
-                            st.success(f"已加入 {symbol}（{stock_name_for_msg}）")
+                            st.session_state._quick_add_success_message = f"已加入 {symbol}（{stock_name_for_msg}）"
                         else:
-                            st.success(f"已加入 {symbol}")
+                            st.session_state._quick_add_success_message = f"已加入 {symbol}"
                         st.rerun()
         col1, col2 = st.columns(2)
         with col1:
