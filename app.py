@@ -587,27 +587,179 @@ def is_fubon_realtime_time():
     富邦 WebSocket 即時成交價使用時間。
 
     - 09:00 <= 現在時間 < 13:30：優先使用富邦 WebSocket trades。
-    - 13:30 後：改用 yfinance fast_info / 歷史 Close，不再使用 WebSocket 最後一筆。
+    - 13:30 後：不再使用 WebSocket 最後一筆價格，改用 yfinance / Yahoo TW / history。
     """
     now = datetime.now(TW_TZ).time()
-    start = datetime.strptime("08:00", "%H:%M").time()
-    end = datetime.strptime("13:35", "%H:%M").time()
+    start = datetime.strptime("09:00", "%H:%M").time()
+    end = datetime.strptime("13:30", "%H:%M").time()
     return start <= now < end
+
+
+def parse_price_value(value):
+    """將 Yahoo / yfinance 回傳的 raw / fmt / 字串價格轉成 float。"""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    if isinstance(value, dict):
+        for key in ["raw", "fmt", "value"]:
+            parsed = parse_price_value(value.get(key))
+            if parsed is not None:
+                return parsed
+        return None
+
+    try:
+        text_val = str(value).strip().replace(",", "")
+        if not text_val or text_val in ["-", "--", "None", "nan"]:
+            return None
+        return float(text_val)
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=30)
+def get_yahoo_tw_quote_price(symbol: str):
+    """
+    使用 Yahoo 台股 quote API 抓目前 / 盤後顯示價格。
+
+    用途：
+    - yfinance fast_info 盤後常回到昨日收盤價或抓不到。
+    - 當 yfinance fast_info 等於昨日收盤價時，改用 Yahoo TW quote 作為盤後價格。
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json,text/plain,*/*",
+        "Referer": "https://tw.stock.yahoo.com/",
+    }
+
+    last_error = ""
+    for yahoo_symbol in build_yfinance_candidates(symbol):
+        url = f"https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.stockList;symbols={yahoo_symbol}"
+        try:
+            res = requests.get(url, headers=headers, timeout=5)
+            if res.status_code != 200:
+                last_error = f"{yahoo_symbol}: HTTP {res.status_code}"
+                continue
+
+            raw_text = res.text.strip()
+            if raw_text.startswith(")]}'"):
+                raw_text = raw_text.split("\n", 1)[-1]
+            payload = json.loads(raw_text)
+        except Exception as e:
+            last_error = f"{yahoo_symbol}: {e}"
+            continue
+
+        items = payload if isinstance(payload, list) else payload.get("data", []) if isinstance(payload, dict) else []
+        if isinstance(items, dict):
+            items = [items]
+        if not isinstance(items, list) or not items:
+            last_error = f"{yahoo_symbol}: Yahoo 無資料"
+            continue
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            price_keys = [
+                "regularMarketPrice",
+                "price",
+                "lastPrice",
+                "tradePrice",
+                "close",
+                "closePrice",
+                "latestPrice",
+            ]
+            for key in price_keys:
+                price = parse_price_value(item.get(key))
+                if price is not None:
+                    return float(price), yahoo_symbol
+
+            for value in item.values():
+                if isinstance(value, dict):
+                    for key in price_keys:
+                        price = parse_price_value(value.get(key))
+                        if price is not None:
+                            return float(price), yahoo_symbol
+
+        last_error = f"{yahoo_symbol}: 找不到可用價格欄位"
+
+    raise ValueError(f"Yahoo TW 無法取得 {symbol} 價格。最後錯誤：{last_error}")
+
+
+@st.cache_data(ttl=300)
+def get_yfinance_latest_daily_close(symbol: str):
+    """盤後備援：用 yfinance daily 取得最新一筆日 K Close。"""
+    last_error = ""
+    for yf_symbol in build_yfinance_candidates(symbol):
+        try:
+            df = yf.download(
+                yf_symbol,
+                period="10d",
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
+        except Exception as e:
+            last_error = f"{yf_symbol}: {e}"
+            continue
+
+        if df is None or df.empty:
+            last_error = f"{yf_symbol}: daily 無資料"
+            continue
+
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+
+        if "Close" not in df.columns:
+            last_error = f"{yf_symbol}: daily 缺少 Close 欄位"
+            continue
+
+        df = df.reset_index()
+        date_col = "Date" if "Date" in df.columns else "Datetime" if "Datetime" in df.columns else df.columns[0]
+        df = df.rename(columns={date_col: "Date"})
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+        df = df.dropna(subset=["Date", "Close"]).sort_values("Date")
+        if df.empty:
+            last_error = f"{yf_symbol}: daily Close 皆為空"
+            continue
+
+        last_row = df.iloc[-1]
+        return float(last_row["Close"]), pd.to_datetime(last_row["Date"]).date(), yf_symbol
+
+    raise ValueError(f"yfinance daily 無法取得 {symbol} 最新收盤價。最後錯誤：{last_error}")
 
 def get_last_price(symbol, df, manager=None):
     """
     價格來源邏輯：
     - 09:00 ~ 13:30 前：優先使用富邦 WebSocket trades。
-    - 13:30 後：依照指定邏輯改用 yfinance fast_info；若抓不到就用 df['Close'].iloc[-1]。
+    - 13:30 後：先照指定邏輯抓 yfinance fast_info；但若 fast_info 抓不到或等於昨日收盤價，視為 stale，再改抓 Yahoo TW。
 
-    13:30 後等同於：
-        ticker = yf.Ticker(symbol)
-        price = ticker.fast_info.get("last_price", None)
-        if price is not None:
-            return float(price)
-        return float(df["Close"].iloc[-1])
+    13:30 後優先順序：
+    1. yfinance fast_info last_price，但必須不是昨日收盤價
+    2. Yahoo TW quote
+    3. yfinance daily 最新 Close，若已更新到今天
+    4. history fallback
     """
     use_fubon_ws = is_fubon_realtime_time()
+    last_hist_close = None
+    last_hist_date = None
+
+    if df is not None and not df.empty and "Close" in df.columns:
+        try:
+            last_hist_close = float(df["Close"].iloc[-1])
+        except Exception:
+            last_hist_close = None
+        try:
+            if "Date" in df.columns:
+                last_hist_date = pd.to_datetime(df["Date"].iloc[-1]).date()
+        except Exception:
+            last_hist_date = None
 
     # 盤中才使用富邦 WebSocket。13:30 後不使用 WebSocket 最後一筆。
     if manager is not None and use_fubon_ws:
@@ -615,30 +767,57 @@ def get_last_price(symbol, df, manager=None):
         if ws_price is not None and pd.notna(ws_price):
             return float(ws_price), "Fubon WebSocket trades"
 
-    # 13:30 後，以及盤中 WebSocket 尚未收到價格時，都使用 yfinance fast_info 作為下一順位。
+    # yfinance fast_info：先照你指定的邏輯用原始 symbol，再試候選 ticker。
+    fast_price = None
     try:
-        # 先照你傳的邏輯使用原始 symbol；失敗或無資料時再試候選 ticker。
         candidates = [str(symbol).strip().upper()] + [s for s in build_yfinance_candidates(symbol) if s != str(symbol).strip().upper()]
         seen = set()
         for yf_symbol in candidates:
             if not yf_symbol or yf_symbol in seen:
                 continue
             seen.add(yf_symbol)
-
             ticker = yf.Ticker(yf_symbol)
             price = ticker.fast_info.get("last_price", None)
             if price is not None and pd.notna(price):
-                if use_fubon_ws:
-                    return float(price), "yfinance fallback"
-                return float(price), "yfinance fast_info after 13:30"
+                fast_price = float(price)
+                break
     except Exception:
-        pass
+        fast_price = None
 
-    # 最後依照你傳的邏輯：使用 df 最後一筆 Close。
-    if df is not None and not df.empty and "Close" in df.columns:
+    if fast_price is not None:
         if use_fubon_ws:
-            return float(df["Close"].iloc[-1]), "history fallback"
-        return float(df["Close"].iloc[-1]), "history after 13:30"
+            return fast_price, "yfinance fallback"
+        # 13:30 後若 fast_info 不等於昨日收盤價，才直接使用。
+        if last_hist_close is None or abs(fast_price - last_hist_close) > 1e-9:
+            return fast_price, "yfinance fast_info after 13:30"
+
+    # 13:30 後，fast_info 抓不到或等於昨日收盤價，就改抓 Yahoo TW。
+    if not use_fubon_ws:
+        try:
+            yahoo_price, yahoo_symbol = get_yahoo_tw_quote_price(symbol)
+            if yahoo_price is not None and pd.notna(yahoo_price):
+                return float(yahoo_price), "Yahoo TW after 13:30"
+        except Exception:
+            pass
+
+        # 如果 yfinance daily 已經更新到今天，使用 daily 最新 Close。
+        try:
+            daily_close, daily_date, daily_symbol = get_yfinance_latest_daily_close(symbol)
+            if daily_close is not None and pd.notna(daily_close):
+                if last_hist_date is None or daily_date > last_hist_date:
+                    return float(daily_close), "yfinance daily after 13:30"
+        except Exception:
+            pass
+
+        # 若 Yahoo / daily 都失敗，但 fast_info 至少有值，即便等於昨日收盤也作為倒數第二層 fallback。
+        if fast_price is not None:
+            return fast_price, "yfinance stale fast_info after 13:30"
+
+    # 最後 fallback：使用 yfinance 歷史 K 最後一筆 Close。
+    if last_hist_close is not None:
+        if use_fubon_ws:
+            return last_hist_close, "history fallback"
+        return last_hist_close, "history after 13:30"
 
     raise ValueError("無法取得即時價格")
 
@@ -719,8 +898,8 @@ def compute_indicators(df, price):
         raise ValueError("OHLC 資料格式異常")
 
     # yfinance 已排除今日，所以最後一筆就是昨收。
-    yesterday_close = float(close.iloc[-2])
-    yesterday_high = float(high.iloc[-2])
+    yesterday_close = float(close.iloc[-1])
+    yesterday_high = float(high.iloc[-1])
     if pd.isna(yesterday_close) or yesterday_close == 0:
         raise ValueError("昨收資料異常")
 
@@ -1290,7 +1469,7 @@ with st.sidebar.expander("🕒 價格來源模式", expanded=False):
     if is_fubon_realtime_time():
         st.success("目前價格模式：09:00~13:30，優先使用富邦 WebSocket trades")
     else:
-        st.info("目前價格模式：13:30 後，使用 yfinance fast_info；失敗則使用 history Close")
+        st.info("目前價格模式：13:30 後，yfinance fast_info 若為昨日收盤價則改抓 Yahoo TW")
 
 # ===== 推送時間與手動指令邏輯判斷 =====
 can_push_now = False
