@@ -585,7 +585,10 @@ def normalize_ohlc(df):
 def is_fubon_realtime_time():
     """
     富邦 WebSocket 即時成交價使用時間。
-    auto 模式：09:00 <= 現在時間 < 13:30 使用 WebSocket；13:30 後使用 yfinance/Yahoo fallback。
+
+    auto 模式：
+    - 09:00 <= 現在時間 < 13:30：優先使用富邦 WebSocket trades。
+    - 13:30 後：使用 after_1330_price_logic()。
     """
     now = datetime.now(TW_TZ).time()
     start = datetime.strptime("09:00", "%H:%M").time()
@@ -593,9 +596,41 @@ def is_fubon_realtime_time():
     return start <= now < end
 
 
+def parse_price_value(value):
+    """將 Yahoo / yfinance 回傳的 raw / fmt / 字串價格轉成 float。"""
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    if isinstance(value, dict):
+        for key in ["raw", "fmt", "value"]:
+            parsed = parse_price_value(value.get(key))
+            if parsed is not None:
+                return parsed
+        return None
+
+    try:
+        text_val = str(value).strip().replace(",", "")
+        if not text_val or text_val in ["-", "--", "None", "nan"]:
+            return None
+        return float(text_val)
+    except Exception:
+        return None
+
+
 def get_yfinance_fast_info_price(symbol: str):
-    """依指定邏輯用 yfinance fast_info 抓價格，原始 symbol 優先，再試 .TW/.TWO 候選。"""
-    candidates = [str(symbol).strip().upper()] + [s for s in build_yfinance_candidates(symbol) if s != str(symbol).strip().upper()]
+    """
+    依照使用者指定邏輯，用 yfinance fast_info 抓價格。
+    先使用原始 symbol；若失敗或無資料，再嘗試 .TW / .TWO 候選代碼。
+    """
+    candidates = [str(symbol).strip().upper()] + [
+        s for s in build_yfinance_candidates(symbol)
+        if s != str(symbol).strip().upper()
+    ]
     seen = set()
     last_error = ""
     for yf_symbol in candidates:
@@ -613,38 +648,21 @@ def get_yfinance_fast_info_price(symbol: str):
     raise ValueError(f"yfinance fast_info 無法取得 {symbol} 價格。最後錯誤：{last_error}")
 
 
-def parse_price_value(value):
-    """將 Yahoo 回傳的 raw/fmt/字串價格轉成 float。"""
-    if value is None:
-        return None
-    try:
-        if pd.isna(value):
-            return None
-    except Exception:
-        pass
-    if isinstance(value, dict):
-        for key in ["raw", "fmt", "value"]:
-            parsed = parse_price_value(value.get(key))
-            if parsed is not None:
-                return parsed
-        return None
-    try:
-        text_val = str(value).strip().replace(",", "")
-        if not text_val or text_val in ["-", "--", "None", "nan"]:
-            return None
-        return float(text_val)
-    except Exception:
-        return None
-
-
 @st.cache_data(ttl=30)
 def get_yahoo_tw_quote_price(symbol: str):
-    """13:30 後 yfinance fast_info 若回昨日收盤價時，使用 Yahoo TW quote 作備援。"""
+    """
+    使用 Yahoo 台股 quote API 抓目前 / 盤後顯示價格。
+
+    用途：
+    - yfinance fast_info 盤後可能回到昨日收盤價。
+    - 當 yfinance fast_info 抓不到或等於昨日收盤價時，用 Yahoo TW quote 作備援。
+    """
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Accept": "application/json,text/plain,*/*",
         "Referer": "https://tw.stock.yahoo.com/",
     }
+
     last_error = ""
     for yahoo_symbol in build_yfinance_candidates(symbol):
         url = f"https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.stockList;symbols={yahoo_symbol}"
@@ -671,36 +689,153 @@ def get_yahoo_tw_quote_price(symbol: str):
         for item in items:
             if not isinstance(item, dict):
                 continue
-            price_keys = ["regularMarketPrice", "price", "lastPrice", "tradePrice", "close", "closePrice", "latestPrice"]
+
+            price_keys = [
+                "regularMarketPrice",
+                "price",
+                "lastPrice",
+                "tradePrice",
+                "close",
+                "closePrice",
+                "latestPrice",
+            ]
             for key in price_keys:
                 price = parse_price_value(item.get(key))
                 if price is not None:
                     return float(price), yahoo_symbol
+
             for value in item.values():
                 if isinstance(value, dict):
                     for key in price_keys:
                         price = parse_price_value(value.get(key))
                         if price is not None:
                             return float(price), yahoo_symbol
+
         last_error = f"{yahoo_symbol}: 找不到可用價格欄位"
+
     raise ValueError(f"Yahoo TW 無法取得 {symbol} 價格。最後錯誤：{last_error}")
 
-def get_last_price(symbol, df, manager=None):
-    """
-    支援側邊欄價格來源按鈕：
-    - auto：09:00~13:30 優先 WebSocket；13:30 後使用 yfinance，若 yfinance 等於昨收則 Yahoo TW 備援。
-    - websocket：強制使用 WebSocket。
-    - yfinance：強制使用 yfinance fast_info；失敗才使用 history Close。
-    """
-    mode = st.session_state.get("price_source_override", "auto")
-    use_fubon_ws = is_fubon_realtime_time()
 
+@st.cache_data(ttl=300)
+def get_yfinance_latest_daily_close(symbol: str):
+    """盤後備援：用 yfinance daily 取得最新一筆日 K Close。"""
+    last_error = ""
+    for yf_symbol in build_yfinance_candidates(symbol):
+        try:
+            daily_df = yf.download(
+                yf_symbol,
+                period="10d",
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
+        except Exception as e:
+            last_error = f"{yf_symbol}: {e}"
+            continue
+
+        if daily_df is None or daily_df.empty:
+            last_error = f"{yf_symbol}: daily 無資料"
+            continue
+
+        if isinstance(daily_df.columns, pd.MultiIndex):
+            daily_df.columns = [c[0] if isinstance(c, tuple) else c for c in daily_df.columns]
+
+        if "Close" not in daily_df.columns:
+            last_error = f"{yf_symbol}: daily 缺少 Close 欄位"
+            continue
+
+        daily_df = daily_df.reset_index()
+        date_col = "Date" if "Date" in daily_df.columns else "Datetime" if "Datetime" in daily_df.columns else daily_df.columns[0]
+        daily_df = daily_df.rename(columns={date_col: "Date"})
+        daily_df["Date"] = pd.to_datetime(daily_df["Date"], errors="coerce")
+        daily_df["Close"] = pd.to_numeric(daily_df["Close"], errors="coerce")
+        daily_df = daily_df.dropna(subset=["Date", "Close"]).sort_values("Date")
+        if daily_df.empty:
+            last_error = f"{yf_symbol}: daily Close 皆為空"
+            continue
+
+        last_row = daily_df.iloc[-1]
+        return float(last_row["Close"]), pd.to_datetime(last_row["Date"]).date(), yf_symbol
+
+    raise ValueError(f"yfinance daily 無法取得 {symbol} 最新收盤價。最後錯誤：{last_error}")
+
+
+def after_1330_price_logic(symbol, df, forced=False):
+    """
+    13:30 後價格邏輯。
+
+    forced=False：auto 13:30 後使用。
+    forced=True：按下 Yfinance 按鈕後也使用同一套 13:30 後邏輯。
+
+    順序：
+    1. yfinance fast_info，若價格不是昨日收盤價就使用。
+    2. 若 fast_info 抓不到或等於昨日收盤價，改抓 Yahoo TW。
+    3. 若 Yahoo 失敗，嘗試 yfinance daily 最新 Close。
+    4. 若仍失敗，fast_info 即使等於昨日收盤價也作為 fallback。
+    5. 最後使用 df 最後一筆 Close。
+    """
     last_hist_close = None
+    last_hist_date = None
+
     if df is not None and not df.empty and "Close" in df.columns:
         try:
             last_hist_close = float(df["Close"].iloc[-1])
         except Exception:
             last_hist_close = None
+        try:
+            if "Date" in df.columns:
+                last_hist_date = pd.to_datetime(df["Date"].iloc[-1]).date()
+        except Exception:
+            last_hist_date = None
+
+    fast_price = None
+    try:
+        fast_price, yf_symbol = get_yfinance_fast_info_price(symbol)
+    except Exception:
+        fast_price = None
+
+    if fast_price is not None and pd.notna(fast_price):
+        if last_hist_close is None or abs(float(fast_price) - last_hist_close) > 1e-9:
+            source = "Forced 13:30 yfinance fast_info" if forced else "yfinance after 13:30"
+            return float(fast_price), source
+
+    try:
+        yahoo_price, yahoo_symbol = get_yahoo_tw_quote_price(symbol)
+        if yahoo_price is not None and pd.notna(yahoo_price):
+            source = "Forced 13:30 Yahoo TW" if forced else "Yahoo TW after 13:30"
+            return float(yahoo_price), source
+    except Exception:
+        pass
+
+    try:
+        daily_close, daily_date, daily_symbol = get_yfinance_latest_daily_close(symbol)
+        if daily_close is not None and pd.notna(daily_close):
+            if last_hist_date is None or daily_date > last_hist_date:
+                source = "Forced 13:30 yfinance daily" if forced else "yfinance daily after 13:30"
+                return float(daily_close), source
+    except Exception:
+        pass
+
+    if fast_price is not None and pd.notna(fast_price):
+        source = "Forced 13:30 yfinance stale fast_info" if forced else "yfinance stale fast_info after 13:30"
+        return float(fast_price), source
+
+    if last_hist_close is not None:
+        source = "Forced 13:30 history fallback" if forced else "history after 13:30"
+        return last_hist_close, source
+
+    raise ValueError("無法取得 13:30 後價格")
+
+def get_last_price(symbol, df, manager=None):
+    """
+    支援側邊欄價格來源按鈕：
+    - auto：09:00~13:30 優先 WebSocket；13:30 後使用 after_1330_price_logic()。
+    - websocket：強制使用 WebSocket。
+    - yfinance：強制使用 after_1330_price_logic()，也就是和 13:30 後同一套抓值邏輯。
+    """
+    mode = st.session_state.get("price_source_override", "auto")
+    use_fubon_ws = is_fubon_realtime_time()
 
     # 強制 WebSocket：不管時間，只使用 WebSocket 已收到的 trades 價格。
     if mode == "websocket":
@@ -711,46 +846,29 @@ def get_last_price(symbol, df, manager=None):
             return float(ws_price), "Forced WebSocket"
         raise ValueError("強制 WebSocket 模式，但尚未收到此股票的 WebSocket trades 成交價")
 
+    # 強制 Yfinance：改成和 13:30 後完全相同的抓值邏輯。
+    if mode == "yfinance":
+        return after_1330_price_logic(symbol, df, forced=True)
+
     # auto 盤中：優先 WebSocket。
-    if mode == "auto" and manager is not None and use_fubon_ws:
+    if manager is not None and use_fubon_ws:
         ws_price = manager.get_price(symbol)
         if ws_price is not None and pd.notna(ws_price):
             return float(ws_price), "Fubon WebSocket trades"
 
-    # 強制 yfinance 或 auto fallback / 13:30 後：使用 yfinance fast_info。
-    yf_price = None
-    try:
-        yf_price, yf_symbol = get_yfinance_fast_info_price(symbol)
-    except Exception:
-        yf_price = None
-
-    if yf_price is not None and pd.notna(yf_price):
-        if mode == "yfinance":
-            return float(yf_price), "Forced yfinance fast_info"
-        if use_fubon_ws:
-            return float(yf_price), "yfinance fallback"
-        # 13:30 後 auto：若 yfinance 不等於昨收，直接使用；若等於昨收，改用 Yahoo TW 備援。
-        if last_hist_close is None or abs(float(yf_price) - last_hist_close) > 1e-9:
-            return float(yf_price), "yfinance after 13:30"
-
-    # 13:30 後 auto：yfinance 抓不到或疑似昨日收盤價，改抓 Yahoo TW。
-    if mode == "auto" and not use_fubon_ws:
+    # auto 盤中 WebSocket 沒資料時，使用 yfinance fast_info fallback。
+    if use_fubon_ws:
         try:
-            yahoo_price, yahoo_symbol = get_yahoo_tw_quote_price(symbol)
-            if yahoo_price is not None and pd.notna(yahoo_price):
-                return float(yahoo_price), "Yahoo TW after 13:30"
+            yf_price, yf_symbol = get_yfinance_fast_info_price(symbol)
+            return float(yf_price), "yfinance fallback"
         except Exception:
             pass
+        if df is not None and not df.empty and "Close" in df.columns:
+            return float(df["Close"].iloc[-1]), "history fallback"
+        raise ValueError("無法取得即時價格")
 
-    # yfinance / Yahoo 都失敗才使用 df 最後一筆 Close。
-    if last_hist_close is not None:
-        if mode == "yfinance":
-            return last_hist_close, "Forced yfinance history fallback"
-        if use_fubon_ws:
-            return last_hist_close, "history fallback"
-        return last_hist_close, "history after 13:30"
-
-    raise ValueError("無法取得即時價格")
+    # auto 13:30 後：使用同一套 13:30 後價格邏輯。
+    return after_1330_price_logic(symbol, df, forced=False)
 
 # =============================================================================
 # 股票名稱
@@ -1034,9 +1152,9 @@ if "fubon_manager" not in st.session_state:
 if "fubon_logged_in" not in st.session_state:
     st.session_state.fubon_logged_in = False
 if "price_source_override" not in st.session_state:
-    # auto: 09:00~13:30 優先 WebSocket；13:30 後使用 yfinance/Yahoo fallback
+    # auto: 09:00~13:30 優先 WebSocket；13:30 後使用 13:30 後價格邏輯
     # websocket: 強制使用 WebSocket
-    # yfinance: 強制使用 yfinance
+    # yfinance: 強制使用「13:30 後價格邏輯」
     st.session_state.price_source_override = "auto"
 if "selected_group_editor" not in st.session_state:
     group_names_init = list(st.session_state.stock_groups.keys())
@@ -1407,7 +1525,7 @@ with st.sidebar.expander("🕒 價格來源模式", expanded=True):
     if current_mode == "websocket":
         st.info("目前價格模式：強制 WebSocket。再次按 WebSocket 可回到自動模式。")
     elif current_mode == "yfinance":
-        st.info("目前價格模式：強制 Yfinance。再次按 Yfinance 可回到自動模式。")
+        st.info("目前價格模式：強制 Yfinance，抓值邏輯同 13:30 後。再次按 Yfinance 可回到自動模式。")
     else:
         if is_fubon_realtime_time():
             st.info("目前價格模式：自動；09:00~13:30 優先 WebSocket")
