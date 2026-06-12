@@ -6,7 +6,6 @@ import time
 import gc
 import requests
 import base64
-import threading
 from html import escape
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -25,14 +24,14 @@ except ImportError:
 st.set_page_config(layout="wide")
 
 # ===== 常數設定 =====
-REFRESH_SEC = 30
+REFRESH_SEC = 60
 ENABLE_GAP_SIGNAL = True
 GROUP_EDIT_PIN = "1219"
 GROUPS_FILE = "stock_groups.json"
 BACKUP_DIR = "backups"
 STOCK_NAME_FILE = "TWstocklistname.txt"
 
-# ===== Telegram 設定 =====
+# ===== Telegram 設定（請替換為你的資訊）=====
 TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")  
 
@@ -65,109 +64,6 @@ DEFAULT_STOCK_GROUPS = {
     ],
 }
 
-# ===== WebSocket 全域資源設定 =====
-@st.cache_resource
-def get_ws_cache():
-    """確保 Streamlit 重刷時，背景接收的價格不會被清空"""
-    return {}
-
-@st.cache_resource
-def get_ws_status():
-    """追蹤 WebSocket 執行緒是否已啟動"""
-    return {"started": False}
-
-GLOBAL_WS_PRICES = get_ws_cache()
-WS_STATUS = get_ws_status()
-
-def on_ws_message(message):
-    """處理富邦 WebSocket 即時回傳的訊息"""
-    try:
-        data = json.loads(message)
-        if "data" in data and isinstance(data["data"], dict):
-            quote = data["data"]
-            symbol = quote.get("symbol")
-            # 抓取成交價
-            price = quote.get("tradePrice") or quote.get("closePrice") or quote.get("price")
-            
-            if symbol and price:
-                GLOBAL_WS_PRICES[symbol] = float(price)
-    except Exception:
-        pass
-
-def start_fubon_websocket(sdk, symbols):
-    """啟動 WebSocket 並訂閱股票"""
-    if WS_STATUS["started"]:
-        return
-
-    try:
-        sdk.marketdata.websocket_client.on('message', on_ws_message)
-        sdk.marketdata.websocket_client.connect()
-        
-        for symbol in symbols:
-            fubon_symbol = str(symbol).split(".")[0]
-            sdk.marketdata.websocket_client.subscribe({
-                'channel': 'trades',
-                'symbol': fubon_symbol
-            })
-            
-        WS_STATUS["started"] = True
-        print("✅ WebSocket 即時行情訂閱成功！")
-    except Exception as e:
-        print(f"❌ WebSocket 連線失敗: {e}")
-
-# ===== 檔案讀寫工具 =====
-def load_stock_groups():
-    if os.path.exists(GROUPS_FILE):
-        try:
-            with open(GROUPS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict) and data:
-                return data
-        except Exception:
-            pass
-    return copy.deepcopy(DEFAULT_STOCK_GROUPS)
-
-# ===== Session State 初始化 =====
-if "auto_refresh_enabled" not in st.session_state:
-    st.session_state.auto_refresh_enabled = False
-if "tg_push_enabled" not in st.session_state:
-    st.session_state.tg_push_enabled = False 
-if "scheduled_push_enabled" not in st.session_state:
-    st.session_state.scheduled_push_enabled = True 
-if "processed_time_slots" not in st.session_state:
-    st.session_state.processed_time_slots = set() 
-if "stock_groups" not in st.session_state:
-    st.session_state.stock_groups = load_stock_groups()
-if "group_editor_unlocked" not in st.session_state:
-    st.session_state.group_editor_unlocked = False
-if "editing_mode" not in st.session_state:
-    st.session_state.editing_mode = False
-if "fubon_sdk" not in st.session_state:
-    st.session_state.fubon_sdk = None
-if "fubon_logged_in" not in st.session_state:
-    st.session_state.fubon_logged_in = False
-if "selected_group_editor" not in st.session_state:
-    group_names_init = list(st.session_state.stock_groups.keys())
-    st.session_state.selected_group_editor = group_names_init[0] if group_names_init else ""
-if "rename_group_input" not in st.session_state:
-    st.session_state.rename_group_input = st.session_state.selected_group_editor
-if "symbols_text_area" not in st.session_state:
-    selected = st.session_state.selected_group_editor
-    st.session_state.symbols_text_area = "\n".join(st.session_state.stock_groups.get(selected, []))
-if "quick_add_symbol_input" not in st.session_state:
-    st.session_state.quick_add_symbol_input = ""
-if "notified_stocks" not in st.session_state:
-    st.session_state.notified_stocks = set()
-if "tg_last_update_id" not in st.session_state:
-    st.session_state.tg_last_update_id = None
-if "_next_selected_group" in st.session_state:
-    pending_group = st.session_state._next_selected_group
-    del st.session_state._next_selected_group
-    if pending_group in st.session_state.stock_groups:
-        st.session_state.selected_group_editor = pending_group
-        st.session_state.rename_group_input = pending_group
-        st.session_state.symbols_text_area = "\n".join(st.session_state.stock_groups.get(pending_group, []))
-
 # ===== CSS =====
 st.markdown("""
 <style>
@@ -184,6 +80,18 @@ st.markdown("""
 .back-to-dashboard-btn:hover { background: #eaeaea; }
 </style>
 """, unsafe_allow_html=True)
+
+# ===== 分組讀寫 =====
+def load_stock_groups():
+    if os.path.exists(GROUPS_FILE):
+        try:
+            with open(GROUPS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data:
+                return data
+        except Exception:
+            pass
+    return copy.deepcopy(DEFAULT_STOCK_GROUPS)
 
 def save_stock_groups(groups):
     with open(GROUPS_FILE, "w", encoding="utf-8") as f:
@@ -241,7 +149,7 @@ def check_telegram_push_command():
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
     params = {"timeout": 1} 
     
-    if st.session_state.get("tg_last_update_id"):
+    if "tg_last_update_id" in st.session_state and st.session_state.tg_last_update_id:
         params["offset"] = st.session_state.tg_last_update_id + 1
 
     try:
@@ -262,51 +170,51 @@ def check_telegram_push_command():
                     if message_text == "push":
                         triggered = True
                 return triggered
-    except Exception:
+    except Exception as e:
         pass
     return False
 
 # ===== Fubon API 行情工具 =====
-@st.cache_data(ttl=3600) # 💡 將 K 線快取改為 1 小時，避免盤中不斷重新拉歷史資料
+@st.cache_data(ttl=REFRESH_SEC)
 def download_stock_data(symbol: str, _sdk):
     """取得歷史日 K 線資料"""
     if _sdk is None:
         raise ValueError("富邦 API 尚未連線")
         
-    fubon_symbol = str(symbol).split(".")[0]
+    fubon_symbol = str(symbol).split(".")[0] # 去除 .TW 後綴
     end_date = date.today()
     start_date = end_date - timedelta(days=30)
     
-    for attempt in range(3):  # 最多重試 3 次
-        try:
-            res = _sdk.marketdata.rest_client.stock.historical.candles(**{
-                "symbol": fubon_symbol,
-                "from": start_date.strftime("%Y-%m-%d"),
-                "to": end_date.strftime("%Y-%m-%d"),
-                "timeframe": "D",
-                "fields": "open,high,low,close,volume"
-            })
-            
-            if res and "data" in res and isinstance(res["data"], list):
-                df = pd.DataFrame(res["data"])
-                if not df.empty:
-                    df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
-                    if "date" in df.columns:
-                        df = df.sort_values("date").reset_index(drop=True)
-                    for col in ["Open", "High", "Low", "Close", "Volume"]:
-                        df[col] = pd.to_numeric(df[col], errors="coerce")
-                    return df
-            return pd.DataFrame()  # 資料為空但沒報錯
-            
-        except Exception as e:
-            error_msg = str(e)
-            if "429" in error_msg or "Rate limit" in error_msg:
-                time.sleep(1.5 * (attempt + 1))  # 遇到 429 就暫停 1.5秒, 3秒...
-                continue
-            else:
-                print(f"富邦 API 抓取 {fubon_symbol} 歷史 K 線失敗: {e}")
-                break
+    try:
+        res = _sdk.marketdata.rest_client.stock.historical.candles(**{
+            "symbol": fubon_symbol,
+            "from": start_date.strftime("%Y-%m-%d"),
+            "to": end_date.strftime("%Y-%m-%d"),
+            "timeframe": "D",
+            "fields": "open,high,low,close,volume"
+        })
+        
+        if res and "data" in res and isinstance(res["data"], list):
+            df = pd.DataFrame(res["data"])
+            if not df.empty:
+                df.rename(columns={
+                    "open": "Open",
+                    "high": "High",
+                    "low": "Low",
+                    "close": "Close",
+                    "volume": "Volume"
+                }, inplace=True)
                 
+                if "date" in df.columns:
+                    df = df.sort_values("date").reset_index(drop=True)
+                    
+                for col in ["Open", "High", "Low", "Close", "Volume"]:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+                    
+                return df
+    except Exception as e:
+        print(f"富邦 API 抓取 {fubon_symbol} 歷史 K 線失敗: {e}")
+        
     return pd.DataFrame()
 
 def normalize_ohlc(df):
@@ -318,18 +226,24 @@ def normalize_ohlc(df):
     return pd.DataFrame()
 
 def get_last_price(symbol, df, _sdk):
-    """直接從 WebSocket 全域快取讀取即時報價"""
+    """優先透過 snapshot 取得即時報價，若無則退回 K 線最新收盤價"""
     fubon_symbol = str(symbol).split(".")[0]
     
-    # 1. 優先拿 WebSocket 的即時資料（瞬間完成讀取）
-    if fubon_symbol in GLOBAL_WS_PRICES:
-        return GLOBAL_WS_PRICES[fubon_symbol]
+    if _sdk is not None:
+        try:
+            res = _sdk.marketdata.rest_client.stock.snapshot.quotes(symbol=fubon_symbol)
+            if res and "data" in res and len(res["data"]) > 0:
+                quote = res["data"][0]
+                price = quote.get("closePrice") or quote.get("tradePrice") or quote.get("close")
+                if price is not None and pd.notna(price):
+                    return float(price)
+        except Exception:
+            pass
 
-    # 2. 如果剛啟動 WS 還沒推播資料，退回使用歷史 K 線的最後一筆收盤價
     if not df.empty and "Close" in df.columns:
         return float(df["Close"].iloc[-1])
         
-    raise ValueError("無法取得即時價格 (WebSocket 尚未推播)")
+    raise ValueError("無法取得即時價格")
 
 @st.cache_data(ttl=86400)
 def load_stock_name_map(file_path: str = STOCK_NAME_FILE) -> dict:
@@ -358,17 +272,12 @@ def get_stock_name(symbol: str, _sdk) -> str:
         
     fubon_symbol = str(symbol).split(".")[0]
     if _sdk is not None:
-        for attempt in range(2):
-            try:
-                res = _sdk.marketdata.rest_client.stock.historical.stats(symbol=fubon_symbol)
-                if res and "name" in res:
-                    return res["name"].strip()
-                break
-            except Exception as e:
-                if "429" in str(e) or "Rate limit" in str(e):
-                    time.sleep(1.0)
-                    continue
-                break
+        try:
+            res = _sdk.marketdata.rest_client.stock.historical.stats(symbol=fubon_symbol)
+            if res and "name" in res:
+                return res["name"].strip()
+        except Exception:
+            pass
             
     return fubon_symbol
 
@@ -387,7 +296,10 @@ def normalize_symbols_from_text(text: str):
     text = text.replace("，", ",")
     lines = []
     for raw_line in text.splitlines():
-        parts = [p.strip().upper() for p in raw_line.strip().split(",") if p.strip()]
+        raw_line = raw_line.strip()
+        if not raw_line:
+            continue
+        parts = [p.strip().upper() for p in raw_line.split(",") if p.strip()]
         lines.extend(parts)
     seen = set()
     result = []
@@ -429,6 +341,15 @@ def normalize_symbol_quick(input_text: str):
         return f"{s}.TW"
     return s
 
+def set_next_selected_group(group_name: str):
+    st.session_state._next_selected_group = group_name
+
+def enter_edit_mode():
+    st.session_state.editing_mode = True
+
+def leave_edit_mode():
+    st.session_state.editing_mode = False
+
 def symbol_to_code(symbol: str) -> str:
     return str(symbol).split(".")[0]
 
@@ -462,14 +383,65 @@ def compact_name_list(names, max_show=3):
         return "、".join(names)
     return "、".join(names[:max_show]) + f" 等{len(names)}檔"
 
-def set_next_selected_group(group_name: str):
-    st.session_state._next_selected_group = group_name
+# ===== Session State 初始化 =====
+if "auto_refresh_enabled" not in st.session_state:
+    st.session_state.auto_refresh_enabled = False
 
-def enter_edit_mode():
-    st.session_state.editing_mode = True
+if "tg_push_enabled" not in st.session_state:
+    st.session_state.tg_push_enabled = False 
 
-def leave_edit_mode():
+if "scheduled_push_enabled" not in st.session_state:
+    st.session_state.scheduled_push_enabled = True 
+
+if "processed_time_slots" not in st.session_state:
+    st.session_state.processed_time_slots = set() 
+
+if "stock_groups" not in st.session_state:
+    st.session_state.stock_groups = load_stock_groups()
+
+if "group_editor_unlocked" not in st.session_state:
+    st.session_state.group_editor_unlocked = False
+
+if "editing_mode" not in st.session_state:
     st.session_state.editing_mode = False
+
+if "fubon_sdk" not in st.session_state:
+    st.session_state.fubon_sdk = None
+
+if "fubon_logged_in" not in st.session_state:
+    st.session_state.fubon_logged_in = False
+
+if "selected_group_editor" not in st.session_state:
+    group_names_init = list(st.session_state.stock_groups.keys())
+    st.session_state.selected_group_editor = group_names_init[0] if group_names_init else ""
+
+if "rename_group_input" not in st.session_state:
+    st.session_state.rename_group_input = st.session_state.selected_group_editor
+
+if "symbols_text_area" not in st.session_state:
+    selected = st.session_state.selected_group_editor
+    st.session_state.symbols_text_area = "\n".join(
+        st.session_state.stock_groups.get(selected, [])
+    )
+
+if "quick_add_symbol_input" not in st.session_state:
+    st.session_state.quick_add_symbol_input = ""
+
+if "notified_stocks" not in st.session_state:
+    st.session_state.notified_stocks = set()
+
+if "tg_last_update_id" not in st.session_state:
+    st.session_state.tg_last_update_id = None
+
+if "_next_selected_group" in st.session_state:
+    pending_group = st.session_state._next_selected_group
+    del st.session_state._next_selected_group
+    if pending_group in st.session_state.stock_groups:
+        st.session_state.selected_group_editor = pending_group
+        st.session_state.rename_group_input = pending_group
+        st.session_state.symbols_text_area = "\n".join(
+            st.session_state.stock_groups.get(pending_group, [])
+        )
 
 def sync_editor_fields_from_selected_group():
     groups = st.session_state.stock_groups
@@ -489,16 +461,16 @@ def sync_editor_fields_from_selected_group():
 def render_fubon_login():
     st.sidebar.markdown("## 🔑 富邦 API 設定 (Fubon Neo)")
     
-    if st.session_state.get("fubon_logged_in"):
+    # 已經登入成功就顯示狀態與登出按鈕
+    if st.session_state.fubon_logged_in:
         st.sidebar.success("✅ 富邦 API 已成功連線")
-        if st.sidebar.button("登出 / 重新連線", width="stretch"):
+        if st.sidebar.button("登出 / 重新連線", use_container_width=True):
             st.session_state.fubon_sdk = None
             st.session_state.fubon_logged_in = False
-            # 關閉連線時，重設 WS 狀態以允許下次登入重連
-            WS_STATUS["started"] = False 
             st.rerun()
         return
 
+    # 嘗試從 Secrets 讀取憑證檔案 (現在只需要讀取 Base64 字串)
     try:
         fubon_secrets = st.secrets["fubon"]
         pfx_base64 = fubon_secrets["pfx_base64"]
@@ -506,41 +478,32 @@ def render_fubon_login():
         st.sidebar.error("❌ 找不到 Streamlit Secrets 中的 pfx_base64 憑證資料。")
         return
 
+    # 在側邊欄顯示輸入框，讓使用者每次手動輸入完整登入資訊
     st.sidebar.info("請輸入富邦證券登入資訊")
     f_id = st.sidebar.text_input("身分證字號", key="f_id_input")
     f_pw = st.sidebar.text_input("富邦登入密碼", key="f_pw_input", type="password")
     f_cert_pw = st.sidebar.text_input("憑證密碼", key="f_cert_pw_input", type="password")
 
-    if st.sidebar.button("連線行情伺服器", width="stretch"):
+    if st.sidebar.button("連線行情伺服器", use_container_width=True):
         if not f_id or not f_pw or not f_cert_pw:
             st.sidebar.warning("請填寫完整的身分證字號與密碼！")
         else:
             try:
+                # 1. 將 Base64 文字還原為暫存的 .pfx 檔案
                 temp_cert_path = "temp_cloud_cert.pfx"
                 with open(temp_cert_path, "wb") as f:
                     f.write(base64.b64decode(pfx_base64))
                     
+                # 2. 執行登入 (合併使用者輸入的帳密與雲端的檔案)
                 with st.spinner("連線富邦 API 中..."):
                     sdk = FubonSDK()
+                    # 確保傳入的身分證字號英文是大寫 (.upper())
                     sdk.login(f_id.strip().upper(), f_pw, temp_cert_path, f_cert_pw)
                     sdk.init_realtime()
                     st.session_state.fubon_sdk = sdk
                     st.session_state.fubon_logged_in = True
                     
                 st.sidebar.success("✅ 富邦 API 連線成功！")
-
-                # 💡 啟動 WebSocket：收集所有股票並放進背景執行緒
-                all_symbols = set()
-                for stocks in st.session_state.stock_groups.values():
-                    all_symbols.update(stocks)
-                
-                ws_thread = threading.Thread(
-                    target=start_fubon_websocket, 
-                    args=(sdk, list(all_symbols)), 
-                    daemon=True
-                )
-                ws_thread.start()
-
                 st.rerun()
                 
             except Exception as e:
@@ -551,7 +514,7 @@ def render_group_editor_lock():
     if st.session_state.group_editor_unlocked:
         st.sidebar.success("已解鎖，可編輯股票分組")
         st.sidebar.info("為避免編輯中被重刷，分組編輯解鎖時會暫停自動更新")
-        if st.sidebar.button("鎖定編輯", key="lock_group_editor_btn", width="stretch"):
+        if st.sidebar.button("鎖定編輯", key="lock_group_editor_btn", use_container_width=True):
             st.session_state.group_editor_unlocked = False
             leave_edit_mode()
             st.rerun()
@@ -560,7 +523,7 @@ def render_group_editor_lock():
     pin_input = st.sidebar.text_input(
         "請輸入 PIN 碼以編輯分組", type="password", key="group_edit_pin_input"
     )
-    if st.sidebar.button("解鎖編輯", key="unlock_group_editor_btn", width="stretch"):
+    if st.sidebar.button("解鎖編輯", key="unlock_group_editor_btn", use_container_width=True):
         if pin_input == GROUP_EDIT_PIN:
             st.session_state.group_editor_unlocked = True
             enter_edit_mode()
@@ -587,7 +550,7 @@ def render_stock_group_editor():
 
     with st.sidebar.expander("➕ 新增分類", expanded=False):
         new_group_name = st.text_input("分類名稱", key="new_group_name_input")
-        if st.button("新增分類", key="add_group_btn", width="stretch"):
+        if st.button("新增分類", key="add_group_btn", use_container_width=True):
             enter_edit_mode()
             name = new_group_name.strip()
             if not name:
@@ -616,7 +579,7 @@ def render_stock_group_editor():
             st.caption(f"標準化代碼：{normalized_quick_symbol}")
 
         with quick_col2:
-            if st.button("加入目前分類", key="quick_add_btn", width="stretch"):
+            if st.button("加入目前分類", key="quick_add_btn", use_container_width=True):
                 enter_edit_mode()
                 symbol = normalize_symbol_quick(quick_input)
                 if not symbol:
@@ -637,7 +600,7 @@ def render_stock_group_editor():
 
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("💾 儲存分類", key="save_group_btn", width="stretch"):
+            if st.button("💾 儲存分類", key="save_group_btn", use_container_width=True):
                 new_name = new_group_name.strip()
                 if not new_name:
                     st.sidebar.warning("分類名稱不可為空")
@@ -657,7 +620,7 @@ def render_stock_group_editor():
                     set_next_selected_group(new_name)
                     st.rerun()
         with col2:
-            if st.button("🗑️ 刪除分類", key="delete_group_btn", width="stretch"):
+            if st.button("🗑️ 刪除分類", key="delete_group_btn", use_container_width=True):
                 if len(groups) <= 1:
                     st.sidebar.warning("至少保留一個分類")
                 else:
@@ -671,8 +634,8 @@ def render_stock_group_editor():
 
     with st.sidebar.expander("📦 備份 / 匯出 / 匯入 JSON", expanded=False):
         export_json_str = json.dumps(st.session_state.stock_groups, ensure_ascii=False, indent=2)
-        st.download_button(label="⬇️ 匯出目前分組 JSON", data=export_json_str, file_name="stock_groups.json", mime="application/json", key="download_groups_json_btn", width="stretch")
-        if st.button("🗂️ 建立本地備份", key="create_local_backup_btn", width="stretch"):
+        st.download_button(label="⬇️ 匯出目前分組 JSON", data=export_json_str, file_name="stock_groups.json", mime="application/json", key="download_groups_json_btn", use_container_width=True)
+        if st.button("🗂️ 建立本地備份", key="create_local_backup_btn", use_container_width=True):
             try:
                 backup_file = save_backup_snapshot(st.session_state.stock_groups)
                 st.sidebar.success(f"已建立備份：{os.path.basename(backup_file)}")
@@ -681,7 +644,7 @@ def render_stock_group_editor():
         uploaded_file = st.file_uploader("上傳股票分組 JSON", type=["json"], key="upload_groups_json_file")
         if uploaded_file is not None:
             st.caption("上傳後按下「匯入並覆蓋目前分組」才會生效")
-            if st.button("📥 匯入並覆蓋目前分組", key="import_groups_json_btn", width="stretch"):
+            if st.button("📥 匯入並覆蓋目前分組", key="import_groups_json_btn", use_container_width=True):
                 try:
                     raw = uploaded_file.read()
                     data = json.loads(raw.decode("utf-8"))
@@ -706,7 +669,7 @@ def render_stock_group_editor():
             st.caption("目前沒有本地備份檔")
 
     with st.sidebar.expander("♻️ 重設", expanded=False):
-        if st.button("還原預設分組", key="reset_groups_btn", width="stretch"):
+        if st.button("還原預設分組", key="reset_groups_btn", use_container_width=True):
             try:
                 save_backup_snapshot(st.session_state.stock_groups)
             except Exception:
@@ -857,7 +820,7 @@ st.markdown('<div id="dashboard-top"></div>', unsafe_allow_html=True)
 col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 
 with col1:
-    if st.button("🔄 手動更新即時資料 (清除快取)", width="stretch"):
+    if st.button("🔄 手動更新即時資料 (清除快取)", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
@@ -895,7 +858,7 @@ st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
 rise_threshold = st.slider("儀表板漲幅達標門檻 (%)", min_value=5, max_value=9, value=5, step=1)
 
 # 強制擋下未登入狀態，避免進入資料抓取迴圈報錯
-if not st.session_state.get("fubon_logged_in", False):
+if not st.session_state.fubon_logged_in:
     st.warning("⚠️ 請先至左側面板連線「富邦 API」，才能開始抓取行情資料。")
     st.stop()
 
@@ -942,7 +905,6 @@ if st.session_state.tg_push_enabled:
         # 修正：關閉排程時不應預設推播，否則 Streamlit 重刷就會一直送訊息
         can_push_now = False
 
-# 資料抓取與統計迴圈
 group_tables = {}
 group_up_summary = []
 
@@ -954,17 +916,12 @@ for group_name, stocks in st.session_state.stock_groups.items():
 
     for symbol in stocks:
         try:
-            # 💡 已移除強制延遲 time.sleep(1.0)，大幅提高讀取速度
-            
-            # 💡 安全地拿取 sdk，避免發生 AttributeError
-            current_sdk = st.session_state.get("fubon_sdk", None)
-            
-            df = download_stock_data(symbol, current_sdk)
+            df = download_stock_data(symbol, st.session_state.fubon_sdk)
             df = normalize_ohlc(df)
             if df.empty: raise ValueError("無效的 K 線資料")
 
-            price = get_last_price(symbol, df, current_sdk)
-            stock_name = get_stock_name(symbol, current_sdk)
+            price = get_last_price(symbol, df, st.session_state.fubon_sdk)
+            stock_name = get_stock_name(symbol, st.session_state.fubon_sdk)
             data = compute_indicators(df, price)
 
             # ===== 執行推播檢查 =====
@@ -1007,13 +964,8 @@ for group_name, stocks in st.session_state.stock_groups.items():
             })
         except Exception as e:
             error_count += 1
-            
-            # 💡 再次安全地拿取 sdk
-            fallback_sdk = st.session_state.get("fubon_sdk", None)
-            fallback_name = get_stock_name(symbol, fallback_sdk) if fallback_sdk else symbol.split(".")[0]
-            
             rows.append({
-                "代碼": symbol, "代碼網址": "", "股票名稱": fallback_name,
+                "代碼": symbol, "代碼網址": "", "股票名稱": get_stock_name(symbol, st.session_state.fubon_sdk),
                 "價格": "錯誤", "漲跌%": "-", "MA位置": "-", "MA排列": "-",
                 "K值": "-", "D值": "-", "KD訊號": "-", "跳空訊號": str(e)
             })
@@ -1048,7 +1000,7 @@ for group_name, info in group_tables.items():
     table_df = info["table"].copy()
     if not table_df.empty and "代碼網址" in table_df.columns: table_df["代碼"] = table_df["代碼網址"]
     display_columns = ["代碼", "股票名稱", "價格", "漲跌%", "MA位置", "MA排列", "K值", "D值", "KD訊號", "跳空訊號"]
-    st.dataframe(table_df[display_columns], width="stretch", column_config={
+    st.dataframe(table_df[display_columns], use_container_width=True, column_config={
         "代碼": st.column_config.LinkColumn("代碼", help="點擊前往台股 Yahoo", display_text=r"https://tw.stock.yahoo.com/quote/(.*)"),
         "股票名稱": st.column_config.TextColumn("股票名稱")
     })
