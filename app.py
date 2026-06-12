@@ -80,19 +80,153 @@ DEFAULT_STOCK_GROUPS = {
 # ===== CSS =====
 st.markdown("""
 <style>
-.dashboard-scroll { overflow-x: auto; overflow-y: hidden; width: 100%; padding-bottom: 8px; }
-.dashboard-grid { display: grid; grid-template-columns: repeat(4, minmax(260px, 1fr)); gap: 12px; min-width: 1120px; }
-.dashboard-card { border-radius: 12px; padding: 14px 16px; min-height: 180px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); box-sizing: border-box; }
-.dashboard-title { font-size: 18px; font-weight: 700; margin-bottom: 10px; color: #000000 !important; }
-.dashboard-main { font-size: 28px; font-weight: 800; margin-bottom: 6px; }
-.dashboard-sub { font-size: 14px; color: #000000 !important; margin-bottom: 10px; }
-.dashboard-detail { font-size: 14px; line-height: 1.7; color: #000000 !important; }
-.dashboard-extra { font-size: 13px; line-height: 1.6; color: #000000 !important; margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(0,0,0,0.12); word-break: break-word; font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
-.dashboard-link, .dashboard-link:link, .dashboard-link:visited, .dashboard-link:hover, .dashboard-link:active { text-decoration: none !important; color: inherit !important; }
-.back-to-dashboard-btn { display: inline-block; padding: 6px 12px; border-radius: 8px; border: 1px solid #999; background: #f5f5f5; color: #000 !important; text-decoration: none !important; font-size: 14px; font-weight: 600; text-align: center; font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+/* ===== Responsive dashboard layout ===== */
+.dashboard-scroll {
+    overflow-x: visible;
+    overflow-y: visible;
+    width: 100%;
+    padding-bottom: 8px;
+}
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 12px;
+    width: 100%;
+    min-width: 0;
+}
+.dashboard-card {
+    border-radius: 12px;
+    padding: 14px 16px;
+    min-height: 0;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    box-sizing: border-box;
+    overflow: hidden;
+}
+.dashboard-title {
+    font-size: clamp(16px, 2.8vw, 18px);
+    font-weight: 700;
+    margin-bottom: 10px;
+    color: #000000 !important;
+    line-height: 1.25;
+    word-break: keep-all;
+}
+.dashboard-main {
+    font-size: clamp(24px, 5vw, 28px);
+    font-weight: 800;
+    margin-bottom: 6px;
+    line-height: 1.15;
+}
+.dashboard-sub {
+    font-size: clamp(12px, 2.6vw, 14px);
+    color: #000000 !important;
+    margin-bottom: 10px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.dashboard-detail {
+    font-size: clamp(12px, 2.6vw, 14px);
+    line-height: 1.6;
+    color: #000000 !important;
+    overflow-wrap: anywhere;
+}
+.dashboard-detail-line {
+    display: block;
+    margin-bottom: 2px;
+}
+.dashboard-extra {
+    font-size: clamp(12px, 2.5vw, 13px);
+    line-height: 1.45;
+    color: #000000 !important;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(0,0,0,0.12);
+    overflow-wrap: normal;
+    word-break: keep-all;
+    font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+}
+.top-stock-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.top-stock-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    white-space: normal;
+    min-width: 0;
+}
+.top-stock-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #000000;
+}
+.top-stock-pct {
+    flex: 0 0 auto;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.dashboard-link,
+.dashboard-link:link,
+.dashboard-link:visited,
+.dashboard-link:hover,
+.dashboard-link:active {
+    text-decoration: none !important;
+    color: inherit !important;
+}
+.back-to-dashboard-btn {
+    display: inline-block;
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid #999;
+    background: #f5f5f5;
+    color: #000 !important;
+    text-decoration: none !important;
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+    font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+}
 .back-to-dashboard-btn:hover { background: #eaeaea; }
 .ws-ok { color:#389e0d; font-weight:700; }
 .ws-bad { color:#cf1322; font-weight:700; }
+
+/* Tablet: readable 2-column cards */
+@media (max-width: 1024px) {
+    .dashboard-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+    }
+    .dashboard-card {
+        padding: 12px 14px;
+    }
+}
+
+/* Phone: single-column cards, no side-scroll, no character-by-character wrapping */
+@media (max-width: 640px) {
+    .dashboard-scroll {
+        overflow-x: hidden;
+    }
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+    .dashboard-card {
+        padding: 12px 14px;
+        border-radius: 10px;
+    }
+    .top-stock-row {
+        align-items: flex-start;
+    }
+    .top-stock-name {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -946,99 +1080,61 @@ def normalize_lookup_symbol(raw_symbol: str) -> str:
 
 @st.cache_data(ttl=86400)
 def load_stock_lookup_maps(file_path: str = STOCK_NAME_FILE) -> dict:
-    """
-    從 TWstocklistname.txt 建立雙向查詢：
-    - code_to_name：2330 -> 台積電
-    - code_to_symbol：2330 -> 2330.TW
-    - name_to_symbol：台積電 -> 2330.TW
-    """
     code_to_name = {}
     code_to_symbol = {}
     name_to_symbol = {}
-
     if not os.path.exists(file_path):
-        return {
-            "code_to_name": code_to_name,
-            "code_to_symbol": code_to_symbol,
-            "name_to_symbol": name_to_symbol,
-        }
-
+        return {"code_to_name": code_to_name, "code_to_symbol": code_to_symbol, "name_to_symbol": name_to_symbol}
     with open(file_path, "r", encoding="utf-8") as f:
         for raw_line in f:
             line = raw_line.strip()
             if not line:
                 continue
             line = line.replace("\ufeff", "").replace("\u3000", " ").strip()
-            if not line:
-                continue
-
             if "\t" in line:
                 parts = [p.strip() for p in line.split("\t") if p.strip()]
             else:
                 m = re.match(r"^([^\s]+)\s+(.+)$", line)
                 parts = [m.group(1).strip(), m.group(2).strip()] if m else []
-
             if len(parts) < 2:
                 continue
-
             raw_symbol = parts[0].upper()
             stock_name = parts[1].strip()
-            if not raw_symbol or not stock_name:
-                continue
-
             symbol = normalize_lookup_symbol(raw_symbol)
             code = symbol_to_code(symbol)
-            if not code:
+            if not code or not stock_name:
                 continue
-
             code_to_name[code] = stock_name
             code_to_symbol[code] = symbol
             name_to_symbol[stock_name] = symbol
             name_to_symbol[stock_name.replace(" ", "")] = symbol
-
-    return {
-        "code_to_name": code_to_name,
-        "code_to_symbol": code_to_symbol,
-        "name_to_symbol": name_to_symbol,
-    }
+    return {"code_to_name": code_to_name, "code_to_symbol": code_to_symbol, "name_to_symbol": name_to_symbol}
 
 
 def resolve_stock_query(input_text: str):
-    """
-    快速新增股票搜尋：支援代碼與名稱。
-    - 輸入 2330 -> 回傳 2330.TW, 台積電, code
-    - 輸入 台積電 -> 回傳 2330.TW, 台積電, name
-    - 輸入 2330.TW -> 回傳 2330.TW, 台積電, ticker
-    """
     q_raw = str(input_text).strip()
     if not q_raw:
         return None, None, None
-
     lookup = load_stock_lookup_maps(STOCK_NAME_FILE)
     code_to_name = lookup.get("code_to_name", {})
     code_to_symbol = lookup.get("code_to_symbol", {})
     name_to_symbol = lookup.get("name_to_symbol", {})
-
     q_upper = q_raw.upper()
-
     if "." in q_upper:
         symbol = q_upper
         code = symbol_to_code(symbol)
         stock_name = code_to_name.get(code) or get_stock_name(symbol)
         return symbol, stock_name, "ticker"
-
     if q_upper.isdigit():
         code = q_upper
         symbol = code_to_symbol.get(code) or normalize_symbol_quick(code)
         stock_name = code_to_name.get(code) or get_stock_name(symbol)
         return symbol, stock_name, "code"
-
     symbol = name_to_symbol.get(q_raw) or name_to_symbol.get(q_raw.replace(" ", ""))
     if symbol:
         code = symbol_to_code(symbol)
         stock_name = code_to_name.get(code) or q_raw
         return symbol, stock_name, "name"
-
     compact_query = q_raw.replace(" ", "")
     if compact_query:
         for stock_name, candidate_symbol in name_to_symbol.items():
@@ -1046,13 +1142,11 @@ def resolve_stock_query(input_text: str):
                 code = symbol_to_code(candidate_symbol)
                 display_name = code_to_name.get(code) or stock_name
                 return candidate_symbol, display_name, "name_partial"
-
     symbol = normalize_symbol_quick(q_raw)
     if symbol:
         code = symbol_to_code(symbol)
         stock_name = code_to_name.get(code)
         return symbol, stock_name, "fallback"
-
     return None, None, None
 
 # =============================================================================
@@ -1197,7 +1291,7 @@ def build_top3_html(valid_stock_stats):
     if not valid_stock_stats:
         return '<span style="color:#666666;">無可用資料</span>'
     top3_sorted = sorted(valid_stock_stats, key=lambda x: x["pct"], reverse=True)[:3]
-    parts = []
+    rows = []
     for item in top3_sorted:
         pct = float(item["pct"])
         if pct > 0:
@@ -1209,11 +1303,13 @@ def build_top3_html(valid_stock_stats):
         code_text = escape(str(item["code"]))
         name_text = escape(str(item["name"]))
         pct_text = f"{pct:+.1f}%"
-        parts.append(
-            f'<span style="color:#000000;">{code_text} {name_text} </span>'
-            f'<span style="color:{pct_color}; font-weight:600;">{pct_text}</span>'
+        rows.append(
+            '<div class="top-stock-row">'
+            f'<span class="top-stock-name">{code_text} {name_text}</span>'
+            f'<span class="top-stock-pct" style="color:{pct_color};">{pct_text}</span>'
+            '</div>'
         )
-    return " | ".join(parts)
+    return '<div class="top-stock-list">' + ''.join(rows) + '</div>'
 
 
 def render_summary_dashboard(group_up_summary, rise_threshold):
@@ -1245,9 +1341,9 @@ def render_summary_dashboard(group_up_summary, rise_threshold):
             f'<div class="dashboard-main" style="color:{accent_color};">{hit_count} / {total_count}</div>'
             f'<div class="dashboard-sub">漲幅達標比例（≥{rise_threshold}%）：{hit_ratio:.0f}%</div>'
             f'<div class="dashboard-detail">'
-            f'🎯 達標：<b>{hit_count}</b> 檔（{hit_names_text}）<br>'
-            f'🔴 一般上漲：<b>{up_count}</b>'
-            f'🟢 下跌：<b>{down_count}</b>'
+            f'<span class="dashboard-detail-line">🎯 達標：<b>{hit_count}</b> 檔（{hit_names_text}）</span>'
+            f'<span class="dashboard-detail-line">🔴 一般上漲：<b>{up_count}</b></span>'
+            f'<span class="dashboard-detail-line">🟢 下跌：<b>{down_count}</b></span>'
             f'</div>'
             f'<div class="dashboard-extra">&#9654; {top3_html}</div>'
             f'</div></a>'
@@ -1505,9 +1601,6 @@ def render_stock_group_editor():
                         groups[selected_group] = current_list
                         st.session_state.stock_groups = groups
                         save_stock_groups(groups)
-                        # 注意：不能在 widget 建立後直接改 symbols_text_area / quick_add_symbol_input，
-                        # 否則 Streamlit 會丟 StreamlitAPIException。
-                        # 先記錄 pending 狀態，下一次 rerun 在 widget 建立前同步欄位。
                         set_next_selected_group(selected_group)
                         st.session_state._clear_quick_add_symbol_input = True
                         if stock_name_for_msg:
