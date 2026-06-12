@@ -929,6 +929,132 @@ def get_stock_name(symbol: str) -> str:
         pass
     return code
 
+
+# =============================================================================
+# 股票代碼 / 股票名稱雙向搜尋（TWstocklistname.txt）
+# =============================================================================
+def normalize_lookup_symbol(raw_symbol: str) -> str:
+    """將 TWstocklistname.txt 內的代碼標準化成可加入分組的 ticker。"""
+    s = str(raw_symbol).strip().upper()
+    if not s:
+        return ""
+    if "." in s:
+        return s
+    normalized = normalize_symbol_quick(s)
+    return normalized or s
+
+
+@st.cache_data(ttl=86400)
+def load_stock_lookup_maps(file_path: str = STOCK_NAME_FILE) -> dict:
+    """
+    從 TWstocklistname.txt 建立雙向查詢：
+    - code_to_name：2330 -> 台積電
+    - code_to_symbol：2330 -> 2330.TW
+    - name_to_symbol：台積電 -> 2330.TW
+    """
+    code_to_name = {}
+    code_to_symbol = {}
+    name_to_symbol = {}
+
+    if not os.path.exists(file_path):
+        return {
+            "code_to_name": code_to_name,
+            "code_to_symbol": code_to_symbol,
+            "name_to_symbol": name_to_symbol,
+        }
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            line = line.replace("\ufeff", "").replace("\u3000", " ").strip()
+            if not line:
+                continue
+
+            if "\t" in line:
+                parts = [p.strip() for p in line.split("\t") if p.strip()]
+            else:
+                m = re.match(r"^([^\s]+)\s+(.+)$", line)
+                parts = [m.group(1).strip(), m.group(2).strip()] if m else []
+
+            if len(parts) < 2:
+                continue
+
+            raw_symbol = parts[0].upper()
+            stock_name = parts[1].strip()
+            if not raw_symbol or not stock_name:
+                continue
+
+            symbol = normalize_lookup_symbol(raw_symbol)
+            code = symbol_to_code(symbol)
+            if not code:
+                continue
+
+            code_to_name[code] = stock_name
+            code_to_symbol[code] = symbol
+            name_to_symbol[stock_name] = symbol
+            name_to_symbol[stock_name.replace(" ", "")] = symbol
+
+    return {
+        "code_to_name": code_to_name,
+        "code_to_symbol": code_to_symbol,
+        "name_to_symbol": name_to_symbol,
+    }
+
+
+def resolve_stock_query(input_text: str):
+    """
+    快速新增股票搜尋：支援代碼與名稱。
+    - 輸入 2330 -> 回傳 2330.TW, 台積電, code
+    - 輸入 台積電 -> 回傳 2330.TW, 台積電, name
+    - 輸入 2330.TW -> 回傳 2330.TW, 台積電, ticker
+    """
+    q_raw = str(input_text).strip()
+    if not q_raw:
+        return None, None, None
+
+    lookup = load_stock_lookup_maps(STOCK_NAME_FILE)
+    code_to_name = lookup.get("code_to_name", {})
+    code_to_symbol = lookup.get("code_to_symbol", {})
+    name_to_symbol = lookup.get("name_to_symbol", {})
+
+    q_upper = q_raw.upper()
+
+    if "." in q_upper:
+        symbol = q_upper
+        code = symbol_to_code(symbol)
+        stock_name = code_to_name.get(code) or get_stock_name(symbol)
+        return symbol, stock_name, "ticker"
+
+    if q_upper.isdigit():
+        code = q_upper
+        symbol = code_to_symbol.get(code) or normalize_symbol_quick(code)
+        stock_name = code_to_name.get(code) or get_stock_name(symbol)
+        return symbol, stock_name, "code"
+
+    symbol = name_to_symbol.get(q_raw) or name_to_symbol.get(q_raw.replace(" ", ""))
+    if symbol:
+        code = symbol_to_code(symbol)
+        stock_name = code_to_name.get(code) or q_raw
+        return symbol, stock_name, "name"
+
+    compact_query = q_raw.replace(" ", "")
+    if compact_query:
+        for stock_name, candidate_symbol in name_to_symbol.items():
+            if compact_query in stock_name.replace(" ", ""):
+                code = symbol_to_code(candidate_symbol)
+                display_name = code_to_name.get(code) or stock_name
+                return candidate_symbol, display_name, "name_partial"
+
+    symbol = normalize_symbol_quick(q_raw)
+    if symbol:
+        code = symbol_to_code(symbol)
+        stock_name = code_to_name.get(code)
+        return symbol, stock_name, "fallback"
+
+    return None, None, None
+
 # =============================================================================
 # 指標計算：除了當日股價外，基礎資料都來自 yfinance
 # =============================================================================
@@ -1341,16 +1467,29 @@ def render_stock_group_editor():
         st.markdown("### ⚡ 快速新增股票搜尋")
         quick_col1, quick_col2 = st.columns([2, 1])
         with quick_col1:
-            quick_input = st.text_input("輸入股票代碼或 ticker", key="quick_add_symbol_input", on_change=enter_edit_mode)
-        normalized_quick_symbol = normalize_symbol_quick(quick_input)
-        if normalized_quick_symbol:
-            st.caption(f"標準化代碼：{normalized_quick_symbol}")
+            quick_input = st.text_input("輸入股票代碼、名稱或 ticker", key="quick_add_symbol_input", on_change=enter_edit_mode)
+
+        resolved_symbol, resolved_name, resolved_type = resolve_stock_query(quick_input)
+        if quick_input.strip():
+            if resolved_symbol:
+                if resolved_name:
+                    if resolved_type in ["code", "ticker"]:
+                        st.caption(f"查詢結果：{resolved_name} / 將加入：{resolved_symbol}")
+                    elif resolved_type in ["name", "name_partial"]:
+                        st.caption(f"查詢結果：{resolved_name} → {resolved_symbol}")
+                    else:
+                        st.caption(f"標準化代碼：{resolved_symbol}")
+                else:
+                    st.caption(f"標準化代碼：{resolved_symbol}")
+            else:
+                st.caption("查無對應股票，請確認 TWstocklistname.txt 或輸入完整 ticker")
+
         with quick_col2:
             if st.button("加入目前分類", key="quick_add_btn", use_container_width=True):
                 enter_edit_mode()
-                symbol = normalize_symbol_quick(quick_input)
+                symbol, stock_name_for_msg, _ = resolve_stock_query(quick_input)
                 if not symbol:
-                    st.warning("請輸入股票代碼")
+                    st.warning("請輸入股票代碼或股票名稱")
                 else:
                     current_list = groups.get(selected_group, [])
                     if symbol in current_list:
@@ -1362,7 +1501,10 @@ def render_stock_group_editor():
                         save_stock_groups(groups)
                         st.session_state.symbols_text_area = "\n".join(current_list)
                         st.session_state.quick_add_symbol_input = ""
-                        st.success(f"已加入 {symbol}")
+                        if stock_name_for_msg:
+                            st.success(f"已加入 {symbol}（{stock_name_for_msg}）")
+                        else:
+                            st.success(f"已加入 {symbol}")
                         st.rerun()
         col1, col2 = st.columns(2)
         with col1:
