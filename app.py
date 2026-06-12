@@ -539,7 +539,7 @@ def compute_indicators(df, price):
     if close.isna().all() or low.isna().all() or high.isna().all():
         raise ValueError("OHLC 資料格式異常")
 
-    yesterday_close = float(close.iloc[-2])
+    yesterday_close = float(close.iloc[-1])
     if pd.isna(yesterday_close) or yesterday_close == 0:
         raise ValueError("昨收資料異常")
 
