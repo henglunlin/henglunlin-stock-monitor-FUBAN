@@ -586,191 +586,59 @@ def is_fubon_realtime_time():
     """
     富邦 WebSocket 即時成交價使用時間。
 
-    規則：
     - 09:00 <= 現在時間 < 13:30：優先使用富邦 WebSocket trades。
-    - 13:30 後：不再使用 WebSocket 最後一筆價格，改用 yfinance 最新價格 / 歷史收盤價。
+    - 13:30 後：改用 yfinance fast_info / 歷史 Close，不再使用 WebSocket 最後一筆。
     """
     now = datetime.now(TW_TZ).time()
     start = datetime.strptime("09:00", "%H:%M").time()
     end = datetime.strptime("13:30", "%H:%M").time()
     return start <= now < end
 
-
-@st.cache_data(ttl=120)
-def get_yfinance_intraday_price(symbol: str):
-    """
-    盤後用 yfinance intraday 取得當日最後一筆價格。
-    用於 13:30 後避免只拿到昨日歷史 Close，導致漲跌幅變成 0%。
-    """
-    last_error = ""
-    for yf_symbol in build_yfinance_candidates(symbol):
-        try:
-            df = yf.download(
-                yf_symbol,
-                period="1d",
-                interval="1m",
-                auto_adjust=True,
-                progress=False,
-                threads=False,
-            )
-        except Exception as e:
-            last_error = f"{yf_symbol}: {e}"
-            continue
-
-        if df is None or df.empty:
-            last_error = f"{yf_symbol}: intraday 無資料"
-            continue
-
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-
-        if "Close" not in df.columns:
-            last_error = f"{yf_symbol}: intraday 缺少 Close 欄位"
-            continue
-
-        close = pd.to_numeric(df["Close"], errors="coerce").dropna()
-        if close.empty:
-            last_error = f"{yf_symbol}: intraday Close 皆為空"
-            continue
-
-        try:
-            last_ts = df.index[-1]
-        except Exception:
-            last_ts = None
-
-        return float(close.iloc[-1]), last_ts, yf_symbol
-
-    raise ValueError(f"yfinance intraday 無法取得 {symbol} 最新價格。最後錯誤：{last_error}")
-
-
-@st.cache_data(ttl=300)
-def get_yfinance_latest_daily_close(symbol: str):
-    """
-    盤後備援：用 yfinance daily 取得最新一筆日 K Close。
-    若 yfinance 已更新今日日 K，這裡會拿到今日收盤價。
-    """
-    last_error = ""
-    for yf_symbol in build_yfinance_candidates(symbol):
-        try:
-            df = yf.download(
-                yf_symbol,
-                period="10d",
-                interval="1d",
-                auto_adjust=True,
-                progress=False,
-                threads=False,
-            )
-        except Exception as e:
-            last_error = f"{yf_symbol}: {e}"
-            continue
-
-        if df is None or df.empty:
-            last_error = f"{yf_symbol}: daily 無資料"
-            continue
-
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-
-        if "Close" not in df.columns:
-            last_error = f"{yf_symbol}: daily 缺少 Close 欄位"
-            continue
-
-        df = df.reset_index()
-        date_col = "Date" if "Date" in df.columns else "Datetime" if "Datetime" in df.columns else df.columns[0]
-        df = df.rename(columns={date_col: "Date"})
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
-        df = df.dropna(subset=["Date", "Close"]).sort_values("Date")
-        if df.empty:
-            last_error = f"{yf_symbol}: daily Close 皆為空"
-            continue
-
-        last_row = df.iloc[-1]
-        return float(last_row["Close"]), pd.to_datetime(last_row["Date"]).date(), yf_symbol
-
-    raise ValueError(f"yfinance daily 無法取得 {symbol} 最新收盤價。最後錯誤：{last_error}")
-
 def get_last_price(symbol, df, manager=None):
     """
     價格來源邏輯：
     - 09:00 ~ 13:30 前：優先使用富邦 WebSocket trades。
-    - 13:30 後：改用 yfinance 最新價，不再使用 WebSocket 最後一筆。
+    - 13:30 後：依照指定邏輯改用 yfinance fast_info；若抓不到就用 df['Close'].iloc[-1]。
 
-    13:30 後的 yfinance 優先順序：
-    1. yfinance fast_info last_price
-    2. yfinance intraday 1m 最新 Close
-    3. yfinance daily 最新 Close
-    4. 原本歷史 df 最後一筆 Close
+    13:30 後等同於：
+        ticker = yf.Ticker(symbol)
+        price = ticker.fast_info.get("last_price", None)
+        if price is not None:
+            return float(price)
+        return float(df["Close"].iloc[-1])
     """
     use_fubon_ws = is_fubon_realtime_time()
-    last_hist_close = None
-    last_hist_date = None
 
-    if df is not None and not df.empty and "Close" in df.columns:
-        try:
-            last_hist_close = float(df["Close"].iloc[-1])
-        except Exception:
-            last_hist_close = None
-        try:
-            if "Date" in df.columns:
-                last_hist_date = pd.to_datetime(df["Date"].iloc[-1]).date()
-        except Exception:
-            last_hist_date = None
-
-    # 盤中：優先使用富邦 WebSocket trades。
+    # 盤中才使用富邦 WebSocket。13:30 後不使用 WebSocket 最後一筆。
     if manager is not None and use_fubon_ws:
         ws_price = manager.get_price(symbol)
         if ws_price is not None and pd.notna(ws_price):
             return float(ws_price), "Fubon WebSocket trades"
 
-    # yfinance fast_info：盤中 WebSocket 沒資料或 13:30 後會使用。
-    fast_price = None
+    # 13:30 後，以及盤中 WebSocket 尚未收到價格時，都使用 yfinance fast_info 作為下一順位。
     try:
-        for yf_symbol in build_yfinance_candidates(symbol):
+        # 先照你傳的邏輯使用原始 symbol；失敗或無資料時再試候選 ticker。
+        candidates = [str(symbol).strip().upper()] + [s for s in build_yfinance_candidates(symbol) if s != str(symbol).strip().upper()]
+        seen = set()
+        for yf_symbol in candidates:
+            if not yf_symbol or yf_symbol in seen:
+                continue
+            seen.add(yf_symbol)
+
             ticker = yf.Ticker(yf_symbol)
             price = ticker.fast_info.get("last_price", None)
             if price is not None and pd.notna(price):
-                fast_price = float(price)
-                break
+                if use_fubon_ws:
+                    return float(price), "yfinance fallback"
+                return float(price), "yfinance fast_info after 13:30"
     except Exception:
-        fast_price = None
+        pass
 
-    if use_fubon_ws and fast_price is not None:
-        return fast_price, "yfinance fallback"
-
-    # 13:30 後：如果 fast_info 有效且不是明顯等於昨日 Close，先使用 fast_info。
-    if not use_fubon_ws and fast_price is not None:
-        if last_hist_close is None or abs(fast_price - last_hist_close) > 1e-9:
-            return fast_price, "yfinance fast_info after 13:30"
-
-    # 13:30 後：嘗試 yfinance intraday 1m，通常比 daily 更快反映當日收盤附近價格。
-    if not use_fubon_ws:
-        try:
-            intra_price, intra_ts, intra_symbol = get_yfinance_intraday_price(symbol)
-            if intra_price is not None and pd.notna(intra_price):
-                if last_hist_close is None or abs(float(intra_price) - last_hist_close) > 1e-9:
-                    return float(intra_price), "yfinance intraday after 13:30"
-        except Exception:
-            pass
-
-        # 若 daily 已更新到今天，使用 daily 最新 Close。
-        try:
-            daily_close, daily_date, daily_symbol = get_yfinance_latest_daily_close(symbol)
-            if daily_close is not None and pd.notna(daily_close):
-                if last_hist_date is None or daily_date > last_hist_date:
-                    return float(daily_close), "yfinance daily after 13:30"
-        except Exception:
-            pass
-
-        # 如果 fast_info 有資料但等於歷史 Close，仍作為倒數第二層 fallback。
-        if fast_price is not None:
-            return fast_price, "yfinance fast_info after 13:30"
-
-    # 最後 fallback：使用 yfinance 歷史 K 最後一筆 Close。
-    if last_hist_close is not None:
+    # 最後依照你傳的邏輯：使用 df 最後一筆 Close。
+    if df is not None and not df.empty and "Close" in df.columns:
         if use_fubon_ws:
-            return last_hist_close, "history fallback"
-        return last_hist_close, "history after 13:30"
+            return float(df["Close"].iloc[-1]), "history fallback"
+        return float(df["Close"].iloc[-1]), "history after 13:30"
 
     raise ValueError("無法取得即時價格")
 
@@ -1422,7 +1290,7 @@ with st.sidebar.expander("🕒 價格來源模式", expanded=False):
     if is_fubon_realtime_time():
         st.success("目前價格模式：09:00~13:30，優先使用富邦 WebSocket trades")
     else:
-        st.info("目前價格模式：13:30 後，改用 yfinance fast_info / intraday / daily / history")
+        st.info("目前價格模式：13:30 後，使用 yfinance fast_info；失敗則使用 history Close")
 
 # ===== 推送時間與手動指令邏輯判斷 =====
 can_push_now = False
