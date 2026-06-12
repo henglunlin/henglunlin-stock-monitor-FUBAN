@@ -262,6 +262,7 @@ class FubonRealtimeManager:
         self.connected = False
         self.error = None
         self.prices = {}
+        self.intraday_ohlc = {}
         self.messages = {}
         self.subscribed = set()
         self.last_message_at = None
@@ -348,6 +349,20 @@ class FubonRealtimeManager:
                 self.messages[symbol] = {"time": now, "raw": msg}
             if symbol and price is not None:
                 self.prices[symbol] = price
+                current = self.intraday_ohlc.get(symbol)
+                if current is None:
+                    self.intraday_ohlc[symbol] = {
+                        "open": price,
+                        "high": price,
+                        "low": price,
+                        "close": price,
+                        "updated_at": now,
+                    }
+                else:
+                    current["high"] = max(float(current.get("high", price)), price)
+                    current["low"] = min(float(current.get("low", price)), price)
+                    current["close"] = price
+                    current["updated_at"] = now
 
     def subscribe(self, symbol: str):
         if not self.ws:
@@ -372,6 +387,12 @@ class FubonRealtimeManager:
         code = symbol_to_code(symbol)
         with self.lock:
             return self.prices.get(code)
+
+    def get_intraday_ohlc(self, symbol: str):
+        code = symbol_to_code(symbol)
+        with self.lock:
+            data = self.intraday_ohlc.get(code)
+            return copy.deepcopy(data) if data else None
 
     def get_message(self, symbol: str):
         code = symbol_to_code(symbol)
@@ -420,9 +441,7 @@ def download_stock_data(symbol: str, _sdk=None):
 
     df = raw.copy()
 
-    # yfinance 有時會回傳 MultiIndex columns，這裡轉成單層欄位。
     if isinstance(df.columns, pd.MultiIndex):
-        # 常見格式：('Close', '2330.TW')，取第一層 OHLCV 名稱。
         df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
 
     required_cols = ["Open", "High", "Low", "Close", "Volume"]
@@ -432,15 +451,11 @@ def download_stock_data(symbol: str, _sdk=None):
         return pd.DataFrame()
 
     df = df.reset_index()
-
-    # Date 欄位名稱可能是 Date 或 Datetime。
     date_col = "Date" if "Date" in df.columns else "Datetime" if "Datetime" in df.columns else df.columns[0]
     df = df.rename(columns={date_col: "Date"})
-
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df = df.dropna(subset=["Date"])
 
-    # 移除今日資料：目前價格由 WebSocket 即時價處理；歷史資料只保留今日以前。
     today = datetime.now(TW_TZ).date()
     df = df[df["Date"].dt.date < today]
 
@@ -448,12 +463,9 @@ def download_stock_data(symbol: str, _sdk=None):
         return pd.DataFrame()
 
     df = df.sort_values("Date").reset_index(drop=True)
-
     for col in required_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-
     df = df.dropna(subset=["Open", "High", "Low", "Close"])
-
     return df[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
 
 
@@ -542,87 +554,146 @@ def load_stock_name_map(file_path: str = STOCK_NAME_FILE) -> dict:
 
 @st.cache_data(ttl=86400)
 def get_stock_name(symbol: str, _sdk=None) -> str:
-    """
-    股票名稱來源：
-    1. 優先讀 TWstocklistname.txt
-    2. 再用 yfinance 的 shortName / longName
-    3. 最後回傳股票代碼
-    """
     code = symbol_to_code(symbol)
     name_map = load_stock_name_map(STOCK_NAME_FILE)
-
     if symbol in name_map:
         return name_map[symbol]
     if code in name_map:
         return name_map[code]
-
     try:
-        info = yf.Ticker(symbol).get_info()
-        for key in ["shortName", "longName", "displayName", "name"]:
-            val = info.get(key)
-            if isinstance(val, str) and val.strip():
-                return val.strip()
+        if _sdk is not None:
+            res = _sdk.marketdata.rest_client.stock.historical.stats(symbol=code)
+            if res and "name" in res:
+                return res["name"].strip()
     except Exception:
         pass
-
     return code
-
 
 # =============================================================================
 # 指標與 UI 格式
 # =============================================================================
-def compute_indicators(df, price):
+def build_intraday_calc_df(df, price, intraday_ohlc=None):
+    """
+    將 yfinance 的「今日以前」日 K，加上一筆今日盤中 K。
+    今日盤中 K 的 close 使用富邦 WebSocket 即時價。
+    今日盤中 K 的 high/low/open 盡量使用 WebSocket trades 累積值。
+    """
+    calc_df = df.copy().reset_index(drop=True)
+    today = datetime.now(TW_TZ).date()
+    today_ts = pd.Timestamp(today)
+    price_val = float(price)
+
+    if intraday_ohlc:
+        today_open = float(intraday_ohlc.get("open", price_val))
+        today_high = float(intraday_ohlc.get("high", price_val))
+        today_low = float(intraday_ohlc.get("low", price_val))
+        today_close = float(intraday_ohlc.get("close", price_val))
+    else:
+        today_open = price_val
+        today_high = price_val
+        today_low = price_val
+        today_close = price_val
+
+    # 若資料源意外包含今日，更新今日資料；正常 yfinance 已移除今日，所以會 append 今日。
+    has_today = False
+    if "Date" in calc_df.columns and not calc_df.empty:
+        dates = pd.to_datetime(calc_df["Date"], errors="coerce").dt.date
+        has_today = bool((dates == today).any())
+
+    if has_today:
+        idx = calc_df.index[pd.to_datetime(calc_df["Date"], errors="coerce").dt.date == today][-1]
+        calc_df.loc[idx, "Open"] = today_open
+        calc_df.loc[idx, "High"] = max(float(calc_df.loc[idx, "High"]), today_high)
+        calc_df.loc[idx, "Low"] = min(float(calc_df.loc[idx, "Low"]), today_low)
+        calc_df.loc[idx, "Close"] = today_close
+        if "Volume" in calc_df.columns:
+            calc_df.loc[idx, "Volume"] = calc_df.loc[idx, "Volume"] if pd.notna(calc_df.loc[idx, "Volume"]) else 0
+    else:
+        new_row = {
+            "Date": today_ts,
+            "Open": today_open,
+            "High": today_high,
+            "Low": today_low,
+            "Close": today_close,
+            "Volume": 0,
+        }
+        calc_df = pd.concat([calc_df, pd.DataFrame([new_row])], ignore_index=True)
+
+    return calc_df
+
+
+def calculate_kd_seed50(high, low, close, period=9):
+    """
+    台股看盤常見 KD 算法：
+    RSV = (Close - 9日低) / (9日高 - 9日低) * 100
+    K = 前一日K * 2/3 + 今日RSV * 1/3
+    D = 前一日D * 2/3 + 今日K * 1/3
+    初始 K、D 使用 50。
+    """
+    high_9 = high.rolling(period).max()
+    low_9 = low.rolling(period).min()
+    denominator = (high_9 - low_9).replace(0, pd.NA)
+    rsv = ((close - low_9) / denominator) * 100
+
+    k_values = []
+    d_values = []
+    prev_k = 50.0
+    prev_d = 50.0
+
+    for r in rsv:
+        if pd.isna(r):
+            k_values.append(pd.NA)
+            d_values.append(pd.NA)
+            continue
+        k_today = (2 / 3) * prev_k + (1 / 3) * float(r)
+        d_today = (2 / 3) * prev_d + (1 / 3) * k_today
+        k_values.append(k_today)
+        d_values.append(d_today)
+        prev_k = k_today
+        prev_d = d_today
+
+    k = pd.Series(k_values, index=close.index, dtype="float64")
+    d = pd.Series(d_values, index=close.index, dtype="float64")
+    return rsv, k, d
+
+
+def compute_indicators(df, price, intraday_ohlc=None):
     """
     計算即時價格對應的漲跌幅、MA、KD、跳空訊號。
 
-    重要修正：
-    - WebSocket price 是盤中即時價。
-    - historical.candles 的最後一筆通常是「昨收」，不是今日盤中價。
-    - 如果 historical.candles 最後一筆 Date 是今天，才使用倒數第二筆當昨收。
-    - 如果 historical.candles 最後一筆 Date 不是今天，使用最後一筆 Close 當昨收。
+    資料來源原則：
+    - 昨收 / 今日以前歷史 OHLCV：yfinance。
+    - 今日收盤價 / 今日高低：富邦 WebSocket trades 累積。
+    - KD 使用台股常見 seed=50 的遞迴算法，並把今日 WebSocket 價格 append 到最後一根 K。
     """
     if df is None or df.empty:
         raise ValueError("下載資料為空")
     if len(df) < 20:
         raise ValueError("歷史資料不足（至少需要 20 筆）")
 
-    calc_df = df.copy().reset_index(drop=True)
+    hist_df = df.copy().reset_index(drop=True)
+    hist_close = pd.to_numeric(hist_df["Close"].squeeze(), errors="coerce")
+    hist_high = pd.to_numeric(hist_df["High"].squeeze(), errors="coerce")
+    if hist_close.isna().all() or hist_high.isna().all():
+        raise ValueError("OHLC 資料格式異常")
 
+    # yfinance 歷史資料已排除今日，所以最後一筆就是昨收。
+    yesterday_close = float(hist_close.iloc[-1])
+    yesterday_high = float(hist_high.iloc[-1])
+    if pd.isna(yesterday_close) or yesterday_close == 0:
+        raise ValueError("昨收資料異常")
+
+    price_val = float(price)
+    change_pct = float((price_val / yesterday_close - 1) * 100)
+
+    # 建立含今日盤中資料的計算用 K 線，讓 MA/KD 也能跟盤中即時價同步。
+    calc_df = build_intraday_calc_df(hist_df, price_val, intraday_ohlc)
     close = pd.to_numeric(calc_df["Close"].squeeze(), errors="coerce")
     low = pd.to_numeric(calc_df["Low"].squeeze(), errors="coerce")
     high = pd.to_numeric(calc_df["High"].squeeze(), errors="coerce")
     if close.isna().all() or low.isna().all() or high.isna().all():
         raise ValueError("OHLC 資料格式異常")
 
-    price_val = float(price)
-
-    # 判斷日 K 最後一筆是不是今天。
-    # 若最後一筆是今天，代表日 K 已包含今日資料，昨收應為倒數第二筆。
-    # 若最後一筆不是今天，代表最後一筆本身就是最近完整交易日收盤價，也就是昨收。
-    last_row_is_today = False
-    if "Date" in calc_df.columns:
-        try:
-            last_date = pd.to_datetime(calc_df["Date"].iloc[-1]).date()
-            today = datetime.now(TW_TZ).date()
-            last_row_is_today = last_date == today
-        except Exception:
-            last_row_is_today = False
-
-    if last_row_is_today:
-        if len(close) < 2:
-            raise ValueError("昨收資料不足")
-        yesterday_close = float(close.iloc[-2])
-        yesterday_high = float(high.iloc[-2])
-    else:
-        yesterday_close = float(close.iloc[-1])
-        yesterday_high = float(high.iloc[-1])
-
-    if pd.isna(yesterday_close) or yesterday_close == 0:
-        raise ValueError("昨收資料異常")
-
-    change_pct = float((price_val / yesterday_close - 1) * 100)
-
-    # MA / KD 使用歷史日 K。若你之後想讓 MA/KD 也盤中即時，可再把 price_val append 成今日 Close。
     ma5 = float(close.tail(5).mean())
     ma10 = float(close.tail(10).mean())
     ma20 = float(close.tail(20).mean())
@@ -643,20 +714,16 @@ def compute_indicators(df, price):
     else:
         ma_trend = "糾結"
 
-    low_9 = low.rolling(9).min()
-    high_9 = high.rolling(9).max()
-    denominator = (high_9 - low_9).replace(0, pd.NA)
-    rsv = ((close - low_9) / denominator) * 100
-    k = rsv.ewm(alpha=1 / 3, adjust=False).mean()
-    d = k.ewm(alpha=1 / 3, adjust=False).mean()
+    rsv, k, d = calculate_kd_seed50(high, low, close, period=9)
 
     if len(k.dropna()) < 2 or len(d.dropna()) < 2:
         raise ValueError("KD 計算資料不足")
 
-    k_t = float(k.iloc[-1])
-    d_t = float(d.iloc[-1])
-    k_y = float(k.iloc[-2])
-    d_y = float(d.iloc[-2])
+    k_t = float(k.dropna().iloc[-1])
+    d_t = float(d.dropna().iloc[-1])
+    k_y = float(k.dropna().iloc[-2])
+    d_y = float(d.dropna().iloc[-2])
+    rsv_t = float(rsv.dropna().iloc[-1]) if len(rsv.dropna()) else None
 
     if k_y <= d_y and k_t > d_t:
         kd_signal = "黃金交叉"
@@ -671,14 +738,8 @@ def compute_indicators(df, price):
     else:
         kd_signal = "-"
 
-    # 跳空判斷：
-    # 若 Date 最後一筆是今天，可用日 K 今日 low；否則盤中最低價尚未接入，先使用即時價作保守替代。
     gap_signal = "-"
-    if last_row_is_today:
-        today_low = float(low.iloc[-1])
-    else:
-        today_low = price_val
-
+    today_low = float(low.iloc[-1])
     if ENABLE_GAP_SIGNAL and pd.notna(today_low) and pd.notna(yesterday_high) and today_low > yesterday_high:
         gap_signal = "跳空"
 
@@ -690,6 +751,7 @@ def compute_indicators(df, price):
         "ma_trend": ma_trend,
         "k": round(k_t, 1),
         "d": round(d_t, 1),
+        "rsv": round(rsv_t, 1) if rsv_t is not None else "-",
         "kd_signal": kd_signal,
         "gap_signal": gap_signal,
     }
@@ -1064,7 +1126,7 @@ def render_stock_group_editor():
 # =============================================================================
 # 主畫面
 # =============================================================================
-st.title("📊 股票監控面板 - 富邦即時價 + yfinance歷史")
+st.title("📊 股票監控面板 - 富邦 WebSocket 即時版")
 st.markdown('<div id="dashboard-top"></div>', unsafe_allow_html=True)
 
 if FubonSDK is None:
@@ -1106,7 +1168,7 @@ st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
 rise_threshold = st.slider("儀表板漲幅達標門檻 (%)", min_value=5, max_value=9, value=5, step=1)
 
 if not st.session_state.fubon_logged_in:
-    st.warning("⚠️ 請先至左側面板連線「富邦 API」，才能抓取當日即時價；今日以前歷史資料由 yfinance 取得。")
+    st.warning("⚠️ 請先至左側面板連線「富邦 API」，才能開始抓取 WebSocket 即時行情資料。")
     st.stop()
 
 manager: FubonRealtimeManager = st.session_state.fubon_manager
@@ -1175,7 +1237,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
 
             price, price_source = get_last_price_with_source(symbol, df, manager)
             stock_name = get_stock_name(symbol, manager.sdk)
-            data = compute_indicators(df, price)
+            data = compute_indicators(df, price, manager.get_intraday_ohlc(symbol))
 
             is_high_gain = data["pct"] >= 5
             has_kd_signal = data["kd_signal"] in ["黃金交叉", "即將黃金交叉"]
@@ -1221,6 +1283,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "MA排列": data["ma_trend"],
                 "K值": data["k"],
                 "D值": f"{data['d']:.1f}",
+                "RSV": data.get("rsv", "-"),
                 "KD訊號": data["kd_signal"],
                 "跳空訊號": data["gap_signal"],
                 "價格來源": price_source,
@@ -1238,6 +1301,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "MA排列": "-",
                 "K值": "-",
                 "D值": "-",
+                "RSV": "-",
                 "KD訊號": "-",
                 "跳空訊號": str(e),
                 "價格來源": "-",
@@ -1283,7 +1347,7 @@ for group_name, info in group_tables.items():
     if not table_df.empty and "代碼網址" in table_df.columns:
         table_df["代碼"] = table_df["代碼網址"]
 
-    display_columns = ["代碼", "股票名稱", "價格", "昨收", "漲跌%", "MA位置", "MA排列", "K值", "D值", "KD訊號", "跳空訊號", "價格來源"]
+    display_columns = ["代碼", "股票名稱", "價格", "昨收", "漲跌%", "MA位置", "MA排列", "K值", "D值", "RSV", "KD訊號", "跳空訊號", "價格來源"]
     st.dataframe(
         table_df[display_columns],
         use_container_width=True,
