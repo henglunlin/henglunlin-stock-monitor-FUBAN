@@ -497,13 +497,13 @@ def check_telegram_push_command():
         if res.status_code == 200:
             data = res.json()
             if data.get("ok") and data.get("result"):
-                st.sidebar.info(f"?? 偷看到 {len(data['result'])} 則新訊息")
+                st.sidebar.info(f"👀 偷看到 {len(data['result'])} 則新訊息")
                 triggered = False
                 for item in data["result"]:
                     update_id = item["update_id"]
                     st.session_state.tg_last_update_id = update_id
                     message_text = item.get("message", {}).get("text", "").strip().lower()
-                    st.sidebar.write(f"?? 內容: {message_text}")
+                    st.sidebar.write(f"💬 內容: {message_text}")
                     if message_text == "push":
                         triggered = True
                 return triggered
@@ -774,9 +774,9 @@ def compute_indicators(df, price):
 def format_color(val):
     if isinstance(val, (int, float)):
         if val > 0:
-            return f"?? +{val:.2f}%"
+            return f"🔴 +{val:.2f}%"
         elif val < 0:
-            return f"?? {val:.2f}%"
+            return f"🟢 {val:.2f}%"
         else:
             return f"{val:.2f}%"
     return val
@@ -785,17 +785,17 @@ def format_color(val):
 def format_k(val):
     if isinstance(val, (int, float)):
         if val >= 74:
-            return f"?? {val:.1f}"
+            return f"🔴 {val:.1f}"
         elif val >= 50:
-            return f"?? {val:.1f}"
+            return f"🟡 {val:.1f}"
         else:
-            return f"?? {val:.1f}"
+            return f"🟢 {val:.1f}"
     return val
 
 
 def format_gap(val):
     if val == "跳空":
-        return "?? 跳空"
+        return "🔴 跳空"
     return "-"
 
 
@@ -823,8 +823,8 @@ def build_top3_html(valid_stock_stats):
 
 
 def render_summary_dashboard(group_up_summary, rise_threshold):
-    st.markdown("### ?? 漲幅儀表板")
-    st.caption(f"目前儀表板統計門檻：漲幅 ? {rise_threshold}%")
+    st.markdown("### 📌 漲幅儀表板")
+    st.caption(f"目前儀表板統計門檻：漲幅 ≥ {rise_threshold}%")
     html_parts = []
     html_parts.append('<div class="dashboard-scroll"><div class="dashboard-grid">')
 
@@ -849,11 +849,11 @@ def render_summary_dashboard(group_up_summary, rise_threshold):
             f'<div class="dashboard-card" style="background-color:{bg_color}; border:1px solid {border_color}; cursor:pointer;">'
             f'<div class="dashboard-title">{group_name}</div>'
             f'<div class="dashboard-main" style="color:{accent_color};">{hit_count} / {total_count}</div>'
-            f'<div class="dashboard-sub">漲幅達標比例（?{rise_threshold}%）：{hit_ratio:.0f}%</div>'
+            f'<div class="dashboard-sub">漲幅達標比例（≥{rise_threshold}%）：{hit_ratio:.0f}%</div>'
             f'<div class="dashboard-detail">'
-            f'?? 達標：<b>{hit_count}</b> 檔（{hit_names_text}）<br>'
-            f'?? 一般上漲：<b>{up_count}</b>'
-            f'?? 下跌：<b>{down_count}</b>'
+            f'🎯 達標：<b>{hit_count}</b> 檔（{hit_names_text}）<br>'
+            f'🔴 一般上漲：<b>{up_count}</b>'
+            f'🟢 下跌：<b>{down_count}</b>'
             f'</div>'
             f'<div class="dashboard-extra">? {top3_html}</div>'
             f'</div></a>'
@@ -943,7 +943,7 @@ def get_fubon_pfx_base64():
 
 
 def render_fubon_login():
-    st.sidebar.markdown("## ?? 富邦 WebSocket 即時價")
+    st.sidebar.markdown("## 🔑 富邦 WebSocket 即時價")
     manager = st.session_state.fubon_manager
     status = manager.get_status()
 
@@ -958,7 +958,7 @@ def render_fubon_login():
         return
 
     if st.session_state.fubon_logged_in:
-        st.sidebar.success("? 富邦 WebSocket 已連線")
+        st.sidebar.success("✅ 富邦 WebSocket 已連線")
         st.sidebar.caption(f"已訂閱：{status['subscribed_count']} 檔")
         if status["last_message_at"]:
             st.sidebar.caption(f"最後資料：{status['last_message_at'].strftime('%H:%M:%S')}")
@@ -1010,7 +1010,7 @@ def render_fubon_login():
 # 分組 UI
 # =============================================================================
 def render_group_editor_lock():
-    st.sidebar.markdown("## ?? 分組編輯鎖")
+    st.sidebar.markdown("## 🔐 分組編輯鎖")
     if st.session_state.group_editor_unlocked:
         st.sidebar.success("已解鎖，可編輯股票分組")
         st.sidebar.info("為避免編輯中被重刷，分組編輯解鎖時會暫停自動更新")
@@ -1031,7 +1031,7 @@ def render_group_editor_lock():
 
 
 def render_stock_group_editor():
-    st.sidebar.markdown("## ??? 股票分組編輯")
+    st.sidebar.markdown("## 🛠️ 股票分組編輯")
     groups = st.session_state.stock_groups
     group_names = list(groups.keys())
     if not group_names:
@@ -1044,7 +1044,7 @@ def render_stock_group_editor():
         st.session_state.rename_group_input = first_group
         st.session_state.symbols_text_area = "\n".join(groups.get(first_group, []))
 
-    with st.sidebar.expander("? 新增分類", expanded=False):
+    with st.sidebar.expander("➕ 新增分類", expanded=False):
         new_group_name = st.text_input("分類名稱", key="new_group_name_input")
         if st.button("新增分類", key="add_group_btn", use_container_width=True):
             enter_edit_mode()
@@ -1060,12 +1060,12 @@ def render_stock_group_editor():
                 set_next_selected_group(name)
                 st.rerun()
 
-    with st.sidebar.expander("?? 編輯分類", expanded=True):
+    with st.sidebar.expander("📝 編輯分類", expanded=True):
         st.selectbox("選擇分類", options=group_names, key="selected_group_editor", on_change=sync_editor_fields_from_selected_group)
         selected_group = st.session_state.selected_group_editor
         new_group_name = st.text_input("分類名稱（可修改）", key="rename_group_input", on_change=enter_edit_mode)
         symbols_text = st.text_area("股票清單（每行一檔，或逗號分隔）", height=220, key="symbols_text_area", on_change=enter_edit_mode)
-        st.markdown("### ? 快速新增股票搜尋")
+        st.markdown("### ⚡ 快速新增股票搜尋")
         quick_col1, quick_col2 = st.columns([2, 1])
         with quick_col1:
             quick_input = st.text_input("輸入股票代碼或 ticker", key="quick_add_symbol_input", on_change=enter_edit_mode)
@@ -1093,7 +1093,7 @@ def render_stock_group_editor():
                         st.rerun()
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("?? 儲存分類", key="save_group_btn", use_container_width=True):
+            if st.button("💾 儲存分類", key="save_group_btn", use_container_width=True):
                 new_name = new_group_name.strip()
                 if not new_name:
                     st.sidebar.warning("分類名稱不可為空")
@@ -1113,7 +1113,7 @@ def render_stock_group_editor():
                     set_next_selected_group(new_name)
                     st.rerun()
         with col2:
-            if st.button("??? 刪除分類", key="delete_group_btn", use_container_width=True):
+            if st.button("🗑️ 刪除分類", key="delete_group_btn", use_container_width=True):
                 if len(groups) <= 1:
                     st.sidebar.warning("至少保留一個分類")
                 else:
@@ -1125,10 +1125,10 @@ def render_stock_group_editor():
                     set_next_selected_group(remaining[0])
                     st.rerun()
 
-    with st.sidebar.expander("?? 備份 / 匯出 / 匯入 JSON", expanded=False):
+    with st.sidebar.expander("📦 備份 / 匯出 / 匯入 JSON", expanded=False):
         export_json_str = json.dumps(st.session_state.stock_groups, ensure_ascii=False, indent=2)
-        st.download_button(label="?? 匯出目前分組 JSON", data=export_json_str, file_name="stock_groups.json", mime="application/json", key="download_groups_json_btn", use_container_width=True)
-        if st.button("??? 建立本地備份", key="create_local_backup_btn", use_container_width=True):
+        st.download_button(label="⬇️ 匯出目前分組 JSON", data=export_json_str, file_name="stock_groups.json", mime="application/json", key="download_groups_json_btn", use_container_width=True)
+        if st.button("🗂️ 建立本地備份", key="create_local_backup_btn", use_container_width=True):
             try:
                 backup_file = save_backup_snapshot(st.session_state.stock_groups)
                 st.sidebar.success(f"已建立備份：{os.path.basename(backup_file)}")
@@ -1137,7 +1137,7 @@ def render_stock_group_editor():
         uploaded_file = st.file_uploader("上傳股票分組 JSON", type=["json"], key="upload_groups_json_file")
         if uploaded_file is not None:
             st.caption("上傳後按下「匯入並覆蓋目前分組」才會生效")
-            if st.button("?? 匯入並覆蓋目前分組", key="import_groups_json_btn", use_container_width=True):
+            if st.button("📥 匯入並覆蓋目前分組", key="import_groups_json_btn", use_container_width=True):
                 try:
                     raw = uploaded_file.read()
                     data = json.loads(raw.decode("utf-8"))
@@ -1160,7 +1160,7 @@ def render_stock_group_editor():
         else:
             st.caption("目前沒有本地備份檔")
 
-    with st.sidebar.expander("?? 重設", expanded=False):
+    with st.sidebar.expander("♻️ 重設", expanded=False):
         if st.button("還原預設分組", key="reset_groups_btn", use_container_width=True):
             try:
                 save_backup_snapshot(st.session_state.stock_groups)
@@ -1173,7 +1173,7 @@ def render_stock_group_editor():
             set_next_selected_group(first_group)
             st.rerun()
 
-    with st.sidebar.expander("?? 分組預覽", expanded=False):
+    with st.sidebar.expander("👀 分組預覽", expanded=False):
         for g, symbols in st.session_state.stock_groups.items():
             st.markdown(f"**{g}**（{len(symbols)}檔）")
             st.caption(", ".join(symbols) if symbols else "（空）")
@@ -1181,26 +1181,26 @@ def render_stock_group_editor():
 # =============================================================================
 # 主畫面
 # =============================================================================
-st.title("?? 股票監控面板 - 告訴我你會買日月光")
+st.title("📊 股票監控面板 - 告訴我你會買日月光")
 st.markdown('<div id="dashboard-top"></div>', unsafe_allow_html=True)
 
 col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 with col1:
-    if st.button("?? 手動更新即時資料 (清除快取)", use_container_width=True):
+    if st.button("🔄 手動更新即時資料 (清除快取)", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 with col2:
-    auto_refresh = st.toggle("?? 啟用自動更新 (30秒)", value=st.session_state.auto_refresh_enabled)
+    auto_refresh = st.toggle("⏱️ 啟用自動更新 (30秒)", value=st.session_state.auto_refresh_enabled)
     if auto_refresh != st.session_state.auto_refresh_enabled:
         st.session_state.auto_refresh_enabled = auto_refresh
         st.rerun()
 with col3:
-    tg_push = st.toggle("?? Telegram 推送開關", value=st.session_state.tg_push_enabled, help="必須開啟此選項，機器人才會發送推播")
+    tg_push = st.toggle("📲 Telegram 推送開關", value=st.session_state.tg_push_enabled, help="必須開啟此選項，機器人才會發送推播")
     if tg_push != st.session_state.tg_push_enabled:
         st.session_state.tg_push_enabled = tg_push
         st.rerun()
 with col4:
-    sched_push = st.toggle("? 定時推送模式", value=st.session_state.scheduled_push_enabled, help="開啟後，僅在 09:40, 10:00, 11:00, 12:00, 13:00 執行推播檢查")
+    sched_push = st.toggle("⏰ 定時推送模式", value=st.session_state.scheduled_push_enabled, help="開啟後，僅在 09:40, 10:00, 11:00, 12:00, 13:00 執行推播檢查")
     if sched_push != st.session_state.scheduled_push_enabled:
         st.session_state.scheduled_push_enabled = sched_push
         st.rerun()
@@ -1234,7 +1234,7 @@ if st.session_state.fubon_logged_in:
     else:
         st.sidebar.info("等待富邦 WebSocket 連線穩定後訂閱股票...")
 
-with st.sidebar.expander("?? 富邦 WebSocket 狀態", expanded=True):
+with st.sidebar.expander("📡 富邦 WebSocket 狀態", expanded=True):
     status = manager.get_status()
     if status["connected"]:
         st.markdown('<span class="ws-ok">● Connected</span>', unsafe_allow_html=True)
@@ -1255,8 +1255,8 @@ if st.session_state.tg_push_enabled:
     if manual_push_triggered:
         can_push_now = True
         st.session_state.notified_stocks = set()
-        st.toast("?? 收到 'push' 指令，強制觸發推播！")
-        send_telegram_message("?? <b>收到指令，開始為您掃描並強制推播強勢股...</b>")
+        st.toast("🚀 收到 'push' 指令，強制觸發推播！")
+        send_telegram_message("🤖 <b>收到指令，開始為您掃描並強制推播強勢股...</b>")
     elif st.session_state.scheduled_push_enabled:
         TARGET_TIMES = [
             tw_now.replace(hour=9, minute=40, second=0, microsecond=0),
@@ -1306,12 +1306,12 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 notify_key = f"{symbol}_{today_str}"
                 if can_push_now and (notify_key not in st.session_state.notified_stocks):
                     msg = (
-                        f"?? <b>強勢股達標通知：{stock_name} ({symbol_link})</b>\n\n"
-                        f"?? 價格：{data['price']}\n"
-                        f"?? 漲幅：+{data['pct']}%\n"
-                        f"?? KD訊號：{data['kd_signal']}\n"
-                        f"?? 跳空訊號：{data['gap_signal']}\n"
-                        f"?? 價格來源：{price_source}"
+                        f"🔔 <b>強勢股達標通知：{stock_name} ({symbol_link})</b>\n\n"
+                        f"📈 價格：{data['price']}\n"
+                        f"🔥 漲幅：+{data['pct']}%\n"
+                        f"📊 KD訊號：{data['kd_signal']}\n"
+                        f"🚀 跳空訊號：{data['gap_signal']}\n"
+                        f"📡 價格來源：{price_source}"
                     )
                     send_telegram_message(msg)
                     st.session_state.notified_stocks.add(notify_key)
@@ -1403,7 +1403,7 @@ for group_name, info in group_tables.items():
     })
     st.markdown('<div style="margin-bottom: 10px;"></div>', unsafe_allow_html=True)
 
-with st.sidebar.expander("?? WebSocket Debug", expanded=False):
+with st.sidebar.expander("🔍 WebSocket Debug", expanded=False):
     debug_code = st.text_input("輸入代碼看最後 WS 原始訊息", value="4919")
     msg = manager.get_message(debug_code)
     if msg:
