@@ -87,9 +87,9 @@ st.markdown("""
 .dashboard-main { font-size: 28px; font-weight: 800; margin-bottom: 6px; }
 .dashboard-sub { font-size: 14px; color: #000000 !important; margin-bottom: 10px; }
 .dashboard-detail { font-size: 14px; line-height: 1.7; color: #000000 !important; }
-.dashboard-extra { font-size: 13px; line-height: 1.6; color: #000000 !important; margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(0,0,0,0.12); word-break: break-word; }
+.dashboard-extra { font-size: 13px; line-height: 1.6; color: #000000 !important; margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(0,0,0,0.12); word-break: break-word; font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
 .dashboard-link, .dashboard-link:link, .dashboard-link:visited, .dashboard-link:hover, .dashboard-link:active { text-decoration: none !important; color: inherit !important; }
-.back-to-dashboard-btn { display: inline-block; padding: 6px 12px; border-radius: 8px; border: 1px solid #999; background: #f5f5f5; color: #000 !important; text-decoration: none !important; font-size: 14px; font-weight: 600; text-align: center; }
+.back-to-dashboard-btn { display: inline-block; padding: 6px 12px; border-radius: 8px; border: 1px solid #999; background: #f5f5f5; color: #000 !important; text-decoration: none !important; font-size: 14px; font-weight: 600; text-align: center; font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
 .back-to-dashboard-btn:hover { background: #eaeaea; }
 .ws-ok { color:#389e0d; font-weight:700; }
 .ws-bad { color:#cf1322; font-weight:700; }
@@ -855,7 +855,7 @@ def render_summary_dashboard(group_up_summary, rise_threshold):
             f'🔴 一般上漲：<b>{up_count}</b>'
             f'🟢 下跌：<b>{down_count}</b>'
             f'</div>'
-            f'<div class="dashboard-extra">? {top3_html}</div>'
+            f'<div class="dashboard-extra">&#9654; {top3_html}</div>'
             f'</div></a>'
         )
         html_parts.append(card_html)
@@ -1310,8 +1310,8 @@ for group_name, stocks in st.session_state.stock_groups.items():
                         f"📈 價格：{data['price']}\n"
                         f"🔥 漲幅：+{data['pct']}%\n"
                         f"📊 KD訊號：{data['kd_signal']}\n"
-                        f"🚀 跳空訊號：{data['gap_signal']}\n"
-                        f"📡 價格來源：{price_source}"
+                        f"🚀 跳空訊號：{data['gap_signal']}"
+                        #f"📡 價格來源：{price_source}"
                     )
                     send_telegram_message(msg)
                     st.session_state.notified_stocks.add(notify_key)
@@ -1392,7 +1392,7 @@ for group_name, info in group_tables.items():
     with header_col1:
         st.subheader(f"【{group_name}】({info['count']}檔)")
     with header_col2:
-        st.markdown("""<div style="text-align:right; padding-top:0.4rem;"><a href="#dashboard-top" class="back-to-dashboard-btn">? 回到儀表板</a></div>""", unsafe_allow_html=True)
+        st.markdown('<div style="text-align:right; padding-top:0.4rem;"><a href="#dashboard-top" class="back-to-dashboard-btn">&#11014;&#65039; 回到儀表板</a></div>', unsafe_allow_html=True)
     table_df = info["table"].copy()
     if not table_df.empty and "代碼網址" in table_df.columns:
         table_df["代碼"] = table_df["代碼網址"]
