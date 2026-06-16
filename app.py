@@ -1558,8 +1558,13 @@ def render_stock_group_editor():
 # =============================================================================
 # 主畫面
 # =============================================================================
+st.markdown(
+    '<div id="dashboard-top" style="scroll-margin-top: 90px;"></div>',
+    unsafe_allow_html=True
+)
 
-APP_LOGO = "jerry.jpg"
+APP_LOGO = "jerry.jpg
+
 
 title_icon_col, title_text_col = st.columns([0.45, 8])
 
