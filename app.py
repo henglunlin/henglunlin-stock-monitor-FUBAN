@@ -1558,8 +1558,30 @@ def render_stock_group_editor():
 # =============================================================================
 # 主畫面
 # =============================================================================
-st.title("📊 股票監控面板 - 告訴我你會買日月光")
-st.markdown('<div id="dashboard-top"></div>', unsafe_allow_html=True)
+
+APP_LOGO = "jerry.jpg"
+
+title_icon_col, title_text_col = st.columns([0.45, 8])
+
+with title_icon_col:
+    st.image(APP_LOGO, width=58)
+
+with title_text_col:
+    st.markdown(
+        """
+        <h1 style="
+            margin: 0;
+            padding-top: 4px;
+            font-size: 42px;
+            font-weight: 800;
+            line-height: 1.2;
+        ">
+            股票監控面板 - 告訴我你會買日月光
+        </h1>
+        """,
+        unsafe_allow_html=True
+    )
+
 
 col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 with col1:
