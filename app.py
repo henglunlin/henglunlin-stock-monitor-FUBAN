@@ -1597,7 +1597,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "K值": data["k"],
                 "D值": f"{data['d']:.1f}",
                 "KD訊號": data["kd_signal"],
-                "MACD柱": data["macd_hist"],
+                "MACD柱": f"{data["macd_hist"]:.2f}",
                 "MACD訊號": data["macd_signal"],
                 "跳空訊號": data["gap_signal"],
                 "價格來源": price_source,
