@@ -41,7 +41,7 @@ st.set_page_config(layout="wide")
 # ===== 常數設定 =====
 TW_TZ = ZoneInfo("Asia/Taipei")
 REFRESH_SEC = 30
-HISTORY_CACHE_TTL = 300
+HISTORY_CACHE_TTL = 3600  # 盤中 yfinance 歷史資料每小時最多重抓一次
 ENABLE_GAP_SIGNAL = True
 GROUP_EDIT_PIN = "1219"
 GROUPS_FILE = "stock_groups.json"
@@ -541,6 +541,19 @@ def is_fubon_realtime_time():
     return start <= now < end
 
 
+def is_after_1330():
+    """13:30 後不自動抓 yfinance，只有手動更新才會重新抓。"""
+    now = datetime.now(TW_TZ).time()
+    end = datetime.strptime("13:30", "%H:%M").time()
+    return now >= end
+
+
+def is_before_market_open():
+    now = datetime.now(TW_TZ).time()
+    start = datetime.strptime("09:00", "%H:%M").time()
+    return now < start
+
+
 def parse_price_value(value):
     if value is None:
         return None
@@ -709,6 +722,7 @@ def after_1330_price_logic(symbol, df, forced=False):
 def get_last_price(symbol, df, manager=None):
     mode = st.session_state.get("price_source_override", "auto")
     use_fubon_ws = is_fubon_realtime_time()
+
     if mode == "websocket":
         if manager is None:
             raise ValueError("強制 WebSocket 模式，但富邦 manager 尚未建立")
@@ -716,21 +730,23 @@ def get_last_price(symbol, df, manager=None):
         if ws_price is not None and pd.notna(ws_price):
             return float(ws_price), "Forced WebSocket"
         raise ValueError("強制 WebSocket 模式，但尚未收到此股票的 WebSocket trades 成交價")
+
     if mode == "yfinance":
+        # 強制 yfinance 仍只在使用者手動切換/手動刷新後才會進入資料快照重建。
         return after_1330_price_logic(symbol, df, forced=True)
-    if manager is not None and use_fubon_ws:
-        ws_price = manager.get_price(symbol)
-        if ws_price is not None and pd.notna(ws_price):
-            return float(ws_price), "Fubon WebSocket trades"
+
+    # 盤中 09:00~13:30：只用富邦 WebSocket 即時價加入歷史資料運算；
+    # 若尚未收到 WebSocket 價格，則用「已快取的歷史收盤價」暫代，不再呼叫 yfinance fast_info。
     if use_fubon_ws:
-        try:
-            yf_price, _ = get_yfinance_fast_info_price(symbol)
-            return float(yf_price), "yfinance fallback"
-        except Exception:
-            pass
+        if manager is not None:
+            ws_price = manager.get_price(symbol)
+            if ws_price is not None and pd.notna(ws_price):
+                return float(ws_price), "Fubon WebSocket trades"
         if df is not None and not df.empty and "Close" in df.columns:
-            return float(df["Close"].iloc[-1]), "history fallback"
-        raise ValueError("無法取得即時價格")
+            return float(df["Close"].iloc[-1]), "history fallback during market"
+        raise ValueError("盤中尚未取得 WebSocket 價格，且歷史資料不可用")
+
+    # 非盤中：若快照不被重建，就不會走到這裡；13:30 後只有手動更新才會重建。
     return after_1330_price_logic(symbol, df, forced=False)
 
 # =============================================================================
@@ -1120,6 +1136,10 @@ if "market_snapshot_at" not in st.session_state:
     st.session_state.market_snapshot_at = None
 if "force_market_refresh" not in st.session_state:
     st.session_state.force_market_refresh = False
+if "manual_refresh_requested" not in st.session_state:
+    st.session_state.manual_refresh_requested = False
+if "history_cache_last_clear_at" not in st.session_state:
+    st.session_state.history_cache_last_clear_at = None
 if "_next_selected_group" in st.session_state:
     pending_group = st.session_state._next_selected_group
     del st.session_state._next_selected_group
@@ -1422,24 +1442,47 @@ def get_stock_groups_signature(groups: dict) -> str:
 
 
 def should_rebuild_market_snapshot(signature: str, can_push_now: bool = False) -> tuple[bool, str]:
-    """集中判斷是否需要重新抓行情；一般 widget 改變不會重抓。"""
-    if st.session_state.get("force_market_refresh", False):
+    """
+    重建行情快照規則：
+    1. 盤中 09:00~13:30：畫面可每 REFRESH_SEC 重算一次，但 yfinance 歷史資料由 @st.cache_data(ttl=3600) 控制每小時最多抓一次。
+    2. 13:30 後：不自動重抓，只有按「手動更新」才重抓 yfinance / Yahoo TW。
+    3. 一般 widget 變更：不重抓，只使用既有快照。
+    """
+    manual_refresh = st.session_state.get("force_market_refresh", False)
+
+    if manual_refresh:
         return True, "手動更新"
+
+    # 13:30 後完全停止自動重抓；若沒有快照，也提示使用者手動更新。
+    if is_after_1330():
+        if st.session_state.market_snapshot is None:
+            return False, "13:30 後請按手動更新抓取收盤資料"
+        return False, "13:30 後停止自動抓取，等待手動更新"
+
+    # 盤前也不要自動打 yfinance；若需要盤前資料，按手動更新。
+    if is_before_market_open():
+        if st.session_state.market_snapshot is None:
+            return False, "盤前請按手動更新抓取資料"
+        return False, "盤前使用既有快照"
+
+    # 盤中第一次載入或分組/價格模式改變，需要建立快照。
     if st.session_state.market_snapshot is None:
-        return True, "首次載入"
+        return True, "盤中首次載入"
     if st.session_state.market_snapshot_signature != signature:
         return True, "股票分組或價格模式改變"
     if can_push_now:
         return True, "推播時段掃描"
+
+    # 盤中自動更新：只重算快照與 WebSocket 即時價；yfinance 歷史資料因 TTL=3600 不會一直打。
     if st.session_state.auto_refresh_enabled and not st.session_state.group_editor_unlocked and not st.session_state.editing_mode:
         last_at = st.session_state.market_snapshot_at
         if last_at is None:
-            return True, "自動更新"
+            return True, "盤中自動更新"
         elapsed = (datetime.now(TW_TZ) - last_at).total_seconds()
         if elapsed >= REFRESH_SEC:
-            return True, f"自動更新 {REFRESH_SEC}s"
-    return False, "使用快照快取"
+            return True, f"盤中自動更新 {REFRESH_SEC}s；歷史資料每小時快取"
 
+    return False, "使用快照快取"
 
 def build_market_snapshot(stock_groups, manager, can_push_now, current_schedule_key, manual_push_triggered, tw_now):
     """真正會呼叫 download/price API 的地方；只在 should_rebuild_market_snapshot=True 時執行。"""
@@ -1613,9 +1656,11 @@ else:
 
 col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 with col1:
-    if st.button("🔄 手動更新即時資料 (清除市場快取)", width="stretch"):
+    if st.button("🔄 手動更新 / 13:30後抓收盤資料", width="stretch"):
         st.cache_data.clear()
         st.session_state.force_market_refresh = True
+        st.session_state.manual_refresh_requested = True
+        st.session_state.history_cache_last_clear_at = datetime.now(TW_TZ)
         st.rerun()
 with col2:
     auto_refresh = st.toggle("⏱️ 啟用自動更新 (30秒)", value=st.session_state.auto_refresh_enabled)
@@ -1680,9 +1725,9 @@ with st.sidebar.expander("🕒 價格來源模式", expanded=True):
         st.info("目前價格模式：強制 Yfinance，抓值邏輯同 13:30 後。再次按 Yfinance 可回到自動模式。")
     else:
         if is_fubon_realtime_time():
-            st.info("目前價格模式：自動；09:00~13:30 優先 WebSocket")
+            st.info("目前價格模式：自動；09:00~13:30 優先 WebSocket，歷史資料每小時快取")
         else:
-            st.info("目前價格模式：自動；13:30 後使用 yfinance；若為昨收則抓 Yahoo TW")
+            st.info("目前價格模式：自動；13:30 後停止自動抓資料，需按手動更新")
     mode_col1, mode_col2 = st.columns(2)
     with mode_col1:
         ws_button_type = "primary" if current_mode == "websocket" else "secondary"
@@ -1751,8 +1796,11 @@ group_up_summary = build_group_up_summary_from_snapshot(snapshot, rise_threshold
 if st.session_state.market_snapshot_at:
     st.caption(
         f"行情快照：{st.session_state.market_snapshot_at.strftime('%Y-%m-%d %H:%M:%S')}；"
-        f"狀態：{'已重抓 - ' + rebuild_reason if need_rebuild else '使用快照，不因 widget 改變重抓'}"
+        f"狀態：{'已重抓 - ' + rebuild_reason if need_rebuild else rebuild_reason}；"
+        f"yfinance歷史資料TTL：{HISTORY_CACHE_TTL // 60}分鐘"
     )
+else:
+    st.info(f"尚未建立行情快照：{rebuild_reason}。若需要抓資料，請按上方『手動更新 / 13:30後抓收盤資料』。")
 
 render_summary_dashboard(group_up_summary, rise_threshold)
 st.divider()
