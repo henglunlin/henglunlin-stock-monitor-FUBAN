@@ -1586,7 +1586,6 @@ for group_name, stocks in st.session_state.stock_groups.items():
             is_high_gain = data["pct"] >= 5
             has_kd_signal = data["kd_signal"] in ["黃金交叉", "即將黃金交叉"]
             has_gap_signal = data["gap_signal"] == "跳空"
-            has_macd_signal = data["macd_signal"] == "MACD翻正"
 
             if is_high_gain or has_kd_signal or has_gap_signal or has_macd_signal:
                 base_symbol = symbol.split('.')[0]
@@ -1600,7 +1599,6 @@ for group_name, stocks in st.session_state.stock_groups.items():
                         f"📈 價格：{data['price']}\n"
                         f"🔥 漲幅：{data['pct']:+.2f}%\n"
                         f"📊 KD訊號：{data['kd_signal']}\n"
-                        f"🧭 MACD訊號：{data['macd_signal']} / MACD柱：{data['macd_hist']}\n"
                         f"🚀 跳空訊號：{data['gap_signal']}\n"
                         f"📡 價格來源：{price_source}"
                     )
