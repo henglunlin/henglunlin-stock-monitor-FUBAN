@@ -7,7 +7,6 @@
 2. 修正 APP_LOGO 字串少了結尾引號的語法錯誤。
 3. 新增 dashboard-top 錨點，「回到儀表板」可正常跳轉。
 4. 儀表板卡片與分類錨點改成真正 HTML。
-5. 加入 MACD 翻正指標與欄位。
 6. 圖片不存在時不會中斷，改顯示文字標題。
 """
 
@@ -886,7 +885,7 @@ def compute_indicators(df, price):
     if df is None or df.empty:
         raise ValueError("下載資料為空")
     if len(df) < 26:
-        raise ValueError("歷史資料不足（至少需要 26 筆，MACD 需要較長資料）")
+        raise ValueError("歷史資料不足（至少需要 26 筆）")
 
     calc_df = df.copy().reset_index(drop=True)
     close = pd.to_numeric(calc_df["Close"].squeeze(), errors="coerce")
@@ -963,23 +962,6 @@ def compute_indicators(df, price):
     else:
         kd_signal = "-"
 
-    # MACD：以補入今日即時價後的 close 序列計算
-    ema12 = close.ewm(span=12, adjust=False).mean()
-    ema26 = close.ewm(span=26, adjust=False).mean()
-    dif = ema12 - ema26
-    dea = dif.ewm(span=9, adjust=False).mean()
-    macd_hist = dif - dea
-    if len(macd_hist.dropna()) < 2:
-        raise ValueError("MACD 計算資料不足")
-    macd_hist_t = float(macd_hist.iloc[-1])
-    macd_hist_y = float(macd_hist.iloc[-2])
-    if macd_hist_y <= 0 and macd_hist_t > 0:
-        macd_signal = "MACD翻正"
-    elif macd_hist_y >= 0 and macd_hist_t < 0:
-        macd_signal = "MACD翻負"
-    else:
-        macd_signal = "-"
-
     gap_signal = "-"
     today_low = price_val
     if ENABLE_GAP_SIGNAL and pd.notna(today_low) and pd.notna(yesterday_high) and today_low > yesterday_high:
@@ -994,8 +976,6 @@ def compute_indicators(df, price):
         "k": round(k_t, 1),
         "d": round(d_t, 1),
         "kd_signal": kd_signal,
-        "macd_hist": round(macd_hist_t, 4),
-        "macd_signal": macd_signal,
         "gap_signal": gap_signal,
     }
 
@@ -1587,7 +1567,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
             has_kd_signal = data["kd_signal"] in ["黃金交叉", "即將黃金交叉"]
             has_gap_signal = data["gap_signal"] == "跳空"
 
-            if is_high_gain or has_kd_signal or has_gap_signal or has_macd_signal:
+            if is_high_gain or has_kd_signal or has_gap_signal:
                 base_symbol = symbol.split('.')[0]
                 yahoo_url = f"https://tw.stock.yahoo.com/quote/{base_symbol}"
                 symbol_link = f'<a href="{yahoo_url}">{symbol}</a>'
@@ -1627,8 +1607,6 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "K值": data["k"],
                 "D值": f"{data['d']:.1f}",
                 "KD訊號": data["kd_signal"],
-                "MACD柱": f"{data['macd_hist']:.2f}",
-                "MACD訊號": data["macd_signal"],
                 "跳空訊號": data["gap_signal"],
                 "價格來源": price_source,
             })
@@ -1646,8 +1624,6 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "K值": "-",
                 "D值": "-",
                 "KD訊號": "-",
-                "MACD柱": "-",
-                "MACD訊號": "-",
                 "跳空訊號": str(e),
                 "價格來源": "-",
             })
@@ -1696,7 +1672,7 @@ for group_name, info in group_tables.items():
         table_df["代碼"] = table_df["代碼網址"]
     display_columns = [
         "代碼", "股票名稱", "價格", "昨收", "漲跌%", "MA位置", "MA排列",
-        "K值", "D值", "KD訊號", "MACD柱", "MACD訊號", "跳空訊號", "價格來源",
+        "K值", "D值", "KD訊號", "跳空訊號", "價格來源",
     ]
     st.dataframe(
         table_df[display_columns],
