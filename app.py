@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-股票監控面板 - 富邦 WebSocket 即時價 + 富邦 HTTP Web API 歷史資料
+股票監控面板 - 富邦 WebSocket 即時價 + yfinance 歷史資料
 
 本版修正 / 改進：
 1. 修正 HTML 被寫成 &lt; / &gt; 導致錨點與按鈕無法跳轉的問題。
@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+import yfinance as yf
 
 # ===== 富邦 API 引入 =====
 try:
@@ -40,7 +41,7 @@ st.set_page_config(layout="wide")
 # ===== 常數設定 =====
 TW_TZ = ZoneInfo("Asia/Taipei")
 REFRESH_SEC = 30
-HISTORY_CACHE_TTL = 3600  # 盤中富邦 HTTP 歷史資料每小時最多重抓一次
+HISTORY_CACHE_TTL = 3600  # 盤中 yfinance 歷史資料每小時最多重抓一次
 ENABLE_GAP_SIGNAL = True
 GROUP_EDIT_PIN = "1219"
 GROUPS_FILE = "stock_groups.json"
@@ -129,7 +130,7 @@ def normalize_symbol_quick(input_text: str):
     return s
 
 
-def build_symbol_candidates(symbol: str):
+def build_yfinance_candidates(symbol: str):
     raw = str(symbol).strip().upper()
     code = symbol_to_code(raw)
     candidates = []
@@ -477,92 +478,51 @@ def check_telegram_push_command():
     return False
 
 # =============================================================================
-# 富邦 HTTP Web API：今日以前歷史資料
+# yfinance：今日以前歷史資料
 # =============================================================================
-def get_fubon_rest_stock_client():
-    """取得富邦 HTTP Web API 的 stock REST client。必須先完成富邦登入與 sdk.init_realtime()。"""
-    manager = st.session_state.get("fubon_manager")
-    if manager is None or getattr(manager, "sdk", None) is None:
-        raise RuntimeError("尚未登入富邦 API，無法使用富邦 HTTP Web API 抓歷史資料")
-    try:
-        return manager.sdk.marketdata.rest_client.stock
-    except Exception as e:
-        raise RuntimeError(f"富邦 HTTP Web API rest_client.stock 尚未就緒：{e}")
-
-
-def _extract_fubon_rest_data(payload):
-    """富邦 REST SDK 通常直接回傳 dict；若版本差異回傳物件，盡量轉成 dict。"""
-    if isinstance(payload, dict):
-        return payload
-    if hasattr(payload, "data") and isinstance(payload.data, dict):
-        return payload.data
-    if hasattr(payload, "json"):
-        try:
-            return payload.json()
-        except Exception:
-            pass
-    return payload
-
-
 @st.cache_data(ttl=HISTORY_CACHE_TTL)
 def download_stock_data(symbol):
-    """今日以前歷史 OHLCV 全部改用富邦 HTTP Web API historical.candles；今日即時價由富邦 WebSocket 補入運算。"""
-    code = symbol_to_code(symbol)
-    rest_stock = get_fubon_rest_stock_client()
-
-    today = datetime.now(TW_TZ).date()
-    from_date = (pd.Timestamp(today) - pd.Timedelta(days=140)).strftime("%Y-%m-%d")
-    to_date = pd.Timestamp(today).strftime("%Y-%m-%d")
-
-    params = {
-        "symbol": code,
-        "from": from_date,
-        "to": to_date,
-        "timeframe": "D",
-        "fields": "open,high,low,close,volume",
-        "sort": "asc",
-    }
-
-    try:
-        payload = rest_stock.historical.candles(**params)
-        payload = _extract_fubon_rest_data(payload)
-    except Exception as e:
-        raise ValueError(f"富邦 HTTP historical.candles 無法取得 {symbol} 歷史資料：{e}")
-
-    if not isinstance(payload, dict):
-        raise ValueError(f"富邦 HTTP historical.candles 回傳格式異常：{payload}")
-
-    rows = payload.get("data", [])
-    if not rows:
-        raise ValueError(f"富邦 HTTP historical.candles 回傳空資料：{symbol}")
-
-    df = pd.DataFrame(rows)
-    rename_map = {
-        "date": "Date",
-        "open": "Open",
-        "high": "High",
-        "low": "Low",
-        "close": "Close",
-        "volume": "Volume",
-    }
-    df = df.rename(columns=rename_map)
-    required_cols = ["Date", "Open", "High", "Low", "Close", "Volume"]
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        raise ValueError(f"富邦 HTTP historical.candles 缺少欄位 {missing}：{symbol}")
-
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df.dropna(subset=["Date"])
-    df = df[df["Date"].dt.date < today]
-    for col in ["Open", "High", "Low", "Close", "Volume"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df["Volume"] = df["Volume"].fillna(0)
-    df = df.dropna(subset=["Open", "High", "Low", "Close"]).sort_values("Date")
-
-    if len(df) < 26:
-        raise ValueError(f"富邦 HTTP 歷史資料不足 {len(df)} 筆，至少需要 26 筆")
-
-    return df[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
+    """今日以前歷史資料全部使用 yfinance；今日即時價不使用 yfinance。"""
+    candidates = build_yfinance_candidates(symbol)
+    last_error = ""
+    for yf_symbol in candidates:
+        try:
+            df = yf.download(
+                yf_symbol,
+                period="3mo",
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
+        except Exception as e:
+            last_error = f"{yf_symbol}: {e}"
+            continue
+        if df is None or df.empty:
+            last_error = f"{yf_symbol}: yfinance 無資料"
+            continue
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+        df = df.reset_index()
+        date_col = "Date" if "Date" in df.columns else "Datetime" if "Datetime" in df.columns else df.columns[0]
+        df = df.rename(columns={date_col: "Date"})
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df = df.dropna(subset=["Date"])
+        today = datetime.now(TW_TZ).date()
+        df = df[df["Date"].dt.date < today]
+        required_cols = ["Open", "High", "Low", "Close", "Volume"]
+        if not set(required_cols).issubset(df.columns):
+            last_error = f"{yf_symbol}: 缺少 OHLCV 欄位"
+            continue
+        for col in required_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["Volume"] = df["Volume"].fillna(0)
+        df = df.dropna(subset=["Open", "High", "Low", "Close"])
+        if len(df) < 26:
+            last_error = f"{yf_symbol}: 歷史資料不足 {len(df)} 筆"
+            continue
+        return df[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
+    raise ValueError(f"無法取得 yfinance 歷史資料。已嘗試：{', '.join(candidates)}。最後錯誤：{last_error}")
 
 def normalize_ohlc(df):
     if df is None or df.empty:
@@ -582,7 +542,7 @@ def is_fubon_realtime_time():
 
 
 def is_after_1330():
-    """13:30 後不自動抓 富邦 HTTP Web API，只有手動更新才會重新抓。"""
+    """13:30 後不自動抓 yfinance，只有手動更新才會重新抓。"""
     now = datetime.now(TW_TZ).time()
     end = datetime.strptime("13:30", "%H:%M").time()
     return now >= end
@@ -618,28 +578,25 @@ def parse_price_value(value):
 
 
 @st.cache_data(ttl=30)
-def get_fubon_http_quote_price(symbol: str):
-    """富邦 HTTP Web API intraday.quote 取得即時/收盤報價。"""
-    code = symbol_to_code(symbol)
-    rest_stock = get_fubon_rest_stock_client()
-    try:
-        payload = rest_stock.intraday.quote(symbol=code)
-        payload = _extract_fubon_rest_data(payload)
-    except Exception as e:
-        raise ValueError(f"富邦 HTTP intraday.quote 無法取得 {symbol} 價格：{e}")
-
-    if not isinstance(payload, dict):
-        raise ValueError(f"富邦 HTTP intraday.quote 回傳格式異常：{payload}")
-
-    for key in ["lastPrice", "closePrice", "lastTrade", "referencePrice", "previousClose"]:
-        value = payload.get(key)
-        if isinstance(value, dict):
-            value = value.get("price")
-        price = parse_price_value(value)
-        if price is not None:
-            return float(price), "Fubon HTTP intraday.quote"
-
-    raise ValueError(f"富邦 HTTP intraday.quote 找不到可用價格欄位：{symbol}")
+def get_yfinance_fast_info_price(symbol: str):
+    candidates = [str(symbol).strip().upper()] + [
+        s for s in build_yfinance_candidates(symbol) if s != str(symbol).strip().upper()
+    ]
+    seen = set()
+    last_error = ""
+    for yf_symbol in candidates:
+        if not yf_symbol or yf_symbol in seen:
+            continue
+        seen.add(yf_symbol)
+        try:
+            ticker = yf.Ticker(yf_symbol)
+            price = ticker.fast_info.get("last_price", None)
+            if price is not None and pd.notna(price):
+                return float(price), yf_symbol
+        except Exception as e:
+            last_error = f"{yf_symbol}: {e}"
+            continue
+    raise ValueError(f"yfinance fast_info 無法取得 {symbol} 價格。最後錯誤：{last_error}")
 
 @st.cache_data(ttl=30)
 def get_yahoo_tw_quote_price(symbol: str):
@@ -649,7 +606,7 @@ def get_yahoo_tw_quote_price(symbol: str):
         "Referer": "https://tw.stock.yahoo.com/",
     }
     last_error = ""
-    for yahoo_symbol in build_symbol_candidates(symbol):
+    for yahoo_symbol in build_yfinance_candidates(symbol):
         url = f"https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.stockList;symbols={yahoo_symbol}"
         try:
             res = requests.get(url, headers=headers, timeout=5)
@@ -685,16 +642,43 @@ def get_yahoo_tw_quote_price(symbol: str):
 
 
 @st.cache_data(ttl=300)
-def get_fubon_http_latest_daily_close(symbol: str):
-    """用富邦 HTTP historical.candles 取得最新日 K 收盤價。"""
-    df = download_stock_data(symbol)
-    if df is None or df.empty:
-        raise ValueError(f"富邦 HTTP historical.candles 無法取得 {symbol} 最新日收盤")
-    last_row = df.sort_values("Date").iloc[-1]
-    return float(last_row["Close"]), pd.to_datetime(last_row["Date"]).date(), "Fubon HTTP historical.candles"
+def get_yfinance_latest_daily_close(symbol: str):
+    last_error = ""
+    for yf_symbol in build_yfinance_candidates(symbol):
+        try:
+            daily_df = yf.download(
+                yf_symbol,
+                period="10d",
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
+        except Exception as e:
+            last_error = f"{yf_symbol}: {e}"
+            continue
+        if daily_df is None or daily_df.empty:
+            last_error = f"{yf_symbol}: daily 無資料"
+            continue
+        if isinstance(daily_df.columns, pd.MultiIndex):
+            daily_df.columns = [c[0] if isinstance(c, tuple) else c for c in daily_df.columns]
+        if "Close" not in daily_df.columns:
+            last_error = f"{yf_symbol}: daily 缺少 Close 欄位"
+            continue
+        daily_df = daily_df.reset_index()
+        date_col = "Date" if "Date" in daily_df.columns else "Datetime" if "Datetime" in daily_df.columns else daily_df.columns[0]
+        daily_df = daily_df.rename(columns={date_col: "Date"})
+        daily_df["Date"] = pd.to_datetime(daily_df["Date"], errors="coerce")
+        daily_df["Close"] = pd.to_numeric(daily_df["Close"], errors="coerce")
+        daily_df = daily_df.dropna(subset=["Date", "Close"]).sort_values("Date")
+        if daily_df.empty:
+            last_error = f"{yf_symbol}: daily Close 皆為空"
+            continue
+        last_row = daily_df.iloc[-1]
+        return float(last_row["Close"]), pd.to_datetime(last_row["Date"]).date(), yf_symbol
+    raise ValueError(f"yfinance daily 無法取得 {symbol} 最新收盤價。最後錯誤：{last_error}")
 
 def after_1330_price_logic(symbol, df, forced=False):
-    """13:30 後價格邏輯：優先富邦 HTTP quote，其次富邦 HTTP 日 K，最後用既有歷史資料。"""
     last_hist_close = None
     last_hist_date = None
     if df is not None and not df.empty and "Close" in df.columns:
@@ -707,25 +691,33 @@ def after_1330_price_logic(symbol, df, forced=False):
                 last_hist_date = pd.to_datetime(df["Date"].iloc[-1]).date()
         except Exception:
             last_hist_date = None
-
+    fast_price = None
     try:
-        http_price, http_source = get_fubon_http_quote_price(symbol)
-        if http_price is not None and pd.notna(http_price):
-            return float(http_price), ("Forced 13:30 " + http_source) if forced else (http_source + " after 13:30")
+        fast_price, _ = get_yfinance_fast_info_price(symbol)
+    except Exception:
+        fast_price = None
+    if fast_price is not None and pd.notna(fast_price):
+        if last_hist_close is None or abs(float(fast_price) - last_hist_close) > 1e-9:
+            return float(fast_price), "Forced 13:30 yfinance fast_info" if forced else "yfinance after 13:30"
+    try:
+        yahoo_price, _ = get_yahoo_tw_quote_price(symbol)
+        if yahoo_price is not None and pd.notna(yahoo_price):
+            return float(yahoo_price), "Forced 13:30 Yahoo TW" if forced else "Yahoo TW after 13:30"
     except Exception:
         pass
-
     try:
-        daily_close, daily_date, _ = get_fubon_http_latest_daily_close(symbol)
+        daily_close, daily_date, _ = get_yfinance_latest_daily_close(symbol)
         if daily_close is not None and pd.notna(daily_close):
-            if last_hist_date is None or daily_date >= last_hist_date:
-                return float(daily_close), "Forced 13:30 Fubon HTTP daily" if forced else "Fubon HTTP daily after 13:30"
+            if last_hist_date is None or daily_date > last_hist_date:
+                return float(daily_close), "Forced 13:30 yfinance daily" if forced else "yfinance daily after 13:30"
     except Exception:
         pass
-
+    if fast_price is not None and pd.notna(fast_price):
+        return float(fast_price), "Forced 13:30 yfinance stale fast_info" if forced else "yfinance stale fast_info after 13:30"
     if last_hist_close is not None:
         return last_hist_close, "Forced 13:30 history fallback" if forced else "history after 13:30"
     raise ValueError("無法取得 13:30 後價格")
+
 
 def get_last_price(symbol, df, manager=None):
     mode = st.session_state.get("price_source_override", "auto")
@@ -739,12 +731,12 @@ def get_last_price(symbol, df, manager=None):
             return float(ws_price), "Forced WebSocket"
         raise ValueError("強制 WebSocket 模式，但尚未收到此股票的 WebSocket trades 成交價")
 
-    if mode == "fubon_http":
-        # 強制富邦 HTTP 模式，抓值邏輯同 13:30 後。
+    if mode == "yfinance":
+        # 強制 yfinance 仍只在使用者手動切換/手動刷新後才會進入資料快照重建。
         return after_1330_price_logic(symbol, df, forced=True)
 
     # 盤中 09:00~13:30：只用富邦 WebSocket 即時價加入歷史資料運算；
-    # 若尚未收到 WebSocket 價格，則用「已快取的歷史收盤價」暫代，不再呼叫任何 HTTP 即時報價。
+    # 若尚未收到 WebSocket 價格，則用「已快取的歷史收盤價」暫代，不再呼叫 yfinance fast_info。
     if use_fubon_ws:
         if manager is not None:
             ws_price = manager.get_price(symbol)
@@ -796,8 +788,25 @@ def get_stock_name(symbol: str) -> str:
         return name_map[symbol]
     if code in name_map:
         return name_map[code]
-    # 不再使用外部資料源查股票名稱；名稱請以 TWstocklistname.txt 或富邦 ticker API 另行補齊。
+    try:
+        for yf_symbol in build_yfinance_candidates(symbol):
+            ticker = yf.Ticker(yf_symbol)
+            info = {}
+            try:
+                info = ticker.get_info()
+            except Exception:
+                try:
+                    info = ticker.info
+                except Exception:
+                    info = {}
+            for key in ["shortName", "longName", "displayName", "name"]:
+                val = info.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+    except Exception:
+        pass
     return code
+
 
 def normalize_lookup_symbol(raw_symbol: str) -> str:
     s = str(raw_symbol).strip().upper()
@@ -1194,7 +1203,7 @@ def render_fubon_login():
         st.rerun()
 
     if FubonSDK is None:
-        st.sidebar.warning("富邦 SDK 未載入，當日價格會使用 富邦 HTTP Web API fallback。")
+        st.sidebar.warning("富邦 SDK 未載入，當日價格會使用 yfinance fallback。")
         return
 
     if st.session_state.fubon_logged_in:
@@ -1213,7 +1222,7 @@ def render_fubon_login():
 
     pfx_base64 = get_fubon_pfx_base64()
     if not pfx_base64:
-        st.sidebar.warning("未設定 st.secrets['fubon']['pfx_base64']，當日價格會使用 富邦 HTTP Web API fallback。")
+        st.sidebar.warning("未設定 st.secrets['fubon']['pfx_base64']，當日價格會使用 yfinance fallback。")
         return
 
     with st.sidebar.expander("富邦登入", expanded=False):
@@ -1435,8 +1444,8 @@ def get_stock_groups_signature(groups: dict) -> str:
 def should_rebuild_market_snapshot(signature: str, can_push_now: bool = False) -> tuple[bool, str]:
     """
     重建行情快照規則：
-    1. 盤中 09:00~13:30：畫面可每 REFRESH_SEC 重算一次，但富邦 HTTP 歷史資料由 @st.cache_data(ttl=3600) 控制每小時最多抓一次。
-    2. 13:30 後：不自動重抓，只有按「手動更新」才重抓富邦 HTTP Web API。
+    1. 盤中 09:00~13:30：畫面可每 REFRESH_SEC 重算一次，但 yfinance 歷史資料由 @st.cache_data(ttl=3600) 控制每小時最多抓一次。
+    2. 13:30 後：不自動重抓，只有按「手動更新」才重抓 yfinance / Yahoo TW。
     3. 一般 widget 變更：不重抓，只使用既有快照。
     """
     manual_refresh = st.session_state.get("force_market_refresh", False)
@@ -1450,7 +1459,7 @@ def should_rebuild_market_snapshot(signature: str, can_push_now: bool = False) -
             return False, "13:30 後請按手動更新抓取收盤資料"
         return False, "13:30 後停止自動抓取，等待手動更新"
 
-    # 盤前也不要自動打 富邦 HTTP Web API；若需要盤前資料，按手動更新。
+    # 盤前也不要自動打 yfinance；若需要盤前資料，按手動更新。
     if is_before_market_open():
         if st.session_state.market_snapshot is None:
             return False, "盤前請按手動更新抓取資料"
@@ -1464,7 +1473,7 @@ def should_rebuild_market_snapshot(signature: str, can_push_now: bool = False) -
     if can_push_now:
         return True, "推播時段掃描"
 
-    # 盤中自動更新：只重算快照與 WebSocket 即時價；富邦 HTTP 歷史資料因 TTL=3600 不會一直打。
+    # 盤中自動更新：只重算快照與 WebSocket 即時價；yfinance 歷史資料因 TTL=3600 不會一直打。
     if st.session_state.auto_refresh_enabled and not st.session_state.group_editor_unlocked and not st.session_state.editing_mode:
         last_at = st.session_state.market_snapshot_at
         if last_at is None:
@@ -1712,13 +1721,13 @@ with st.sidebar.expander("🕒 價格來源模式", expanded=True):
     current_mode = st.session_state.get("price_source_override", "auto")
     if current_mode == "websocket":
         st.info("目前價格模式：強制 WebSocket。再次按 WebSocket 可回到自動模式。")
-    elif current_mode == "fubon_http":
-        st.info("目前價格模式：強制富邦 HTTP，抓值邏輯同 13:30 後。再次按富邦 HTTP可回到自動模式。")
+    elif current_mode == "yfinance":
+        st.info("目前價格模式：強制 Yfinance，抓值邏輯同 13:30 後。再次按 Yfinance 可回到自動模式。")
     else:
         if is_fubon_realtime_time():
-            st.info("目前價格模式：自動；09:00~13:30 優先 WebSocket，富邦 HTTP 歷史資料每小時快取")
+            st.info("目前價格模式：自動；09:00~13:30 優先 WebSocket，歷史資料每小時快取")
         else:
-            st.info("目前價格模式：自動；13:30 後停止自動抓資料，需按手動更新；手動後走富邦 HTTP")
+            st.info("目前價格模式：自動；13:30 後停止自動抓資料，需按手動更新")
     mode_col1, mode_col2 = st.columns(2)
     with mode_col1:
         ws_button_type = "primary" if current_mode == "websocket" else "secondary"
@@ -1726,9 +1735,9 @@ with st.sidebar.expander("🕒 價格來源模式", expanded=True):
             st.session_state.price_source_override = "auto" if current_mode == "websocket" else "websocket"
             st.rerun()
     with mode_col2:
-        yf_button_type = "primary" if current_mode == "fubon_http" else "secondary"
-        if st.button("富邦 HTTP", key="force_fubon_http_price_btn", width="stretch", type=yf_button_type):
-            st.session_state.price_source_override = "auto" if current_mode == "fubon_http" else "fubon_http"
+        yf_button_type = "primary" if current_mode == "yfinance" else "secondary"
+        if st.button("Yfinance", key="force_yfinance_price_btn", width="stretch", type=yf_button_type):
+            st.session_state.price_source_override = "auto" if current_mode == "yfinance" else "yfinance"
             st.rerun()
 
 # ===== 推送時間與手動指令邏輯判斷 =====
@@ -1788,7 +1797,7 @@ if st.session_state.market_snapshot_at:
     st.caption(
         f"行情快照：{st.session_state.market_snapshot_at.strftime('%Y-%m-%d %H:%M:%S')}；"
         f"狀態：{'已重抓 - ' + rebuild_reason if need_rebuild else rebuild_reason}；"
-        f"富邦HTTP歷史資料TTL：{HISTORY_CACHE_TTL // 60}分鐘"
+        f"yfinance歷史資料TTL：{HISTORY_CACHE_TTL // 60}分鐘"
     )
 else:
     st.info(f"尚未建立行情快照：{rebuild_reason}。若需要抓資料，請按上方『手動更新 / 13:30後抓收盤資料』。")
