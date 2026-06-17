@@ -522,7 +522,7 @@ def download_stock_data(symbol):
             last_error = f"{yf_symbol}: 歷史資料不足 {len(df)} 筆"
             continue
         return df[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
-    raise ValueError(f"無法取得 yfinance 歷史資料。已嘗試：{', '.join(candidates)}。最後錯誤：{last_error}")
+    raise ValueError(f"無法取得 yfinance 歷史資料。已嘗試：{', '.join(candidates)}。最後錯誤：{last_error}。TWSE/TPEx 備援只提供即時/收盤報價，無法補足 3mo OHLC 歷史資料")
 
 def normalize_ohlc(df):
     if df is None or df.empty:
@@ -577,6 +577,124 @@ def parse_price_value(value):
         return None
 
 
+def get_symbol_market(symbol: str) -> str:
+    """回傳 tw / two / unknown。"""
+    s = str(symbol).strip().upper()
+    if s.endswith(".TW"):
+        return "tw"
+    if s.endswith(".TWO"):
+        return "two"
+    return "unknown"
+
+
+def extract_quote_price_from_item(item: dict):
+    """從 TWSE / TPEx 回傳 dict 裡盡可能抓出可用價格。"""
+    if not isinstance(item, dict):
+        return None
+    preferred_keys = [
+        "z", "price", "lastPrice", "tradePrice", "regularMarketPrice",
+        "latestPrice", "close", "closePrice", "ClosingPrice", "ClosePrice",
+        "FinalPrice", "LastPrice", "成交價", "最新成交價", "收盤價", "參考價",
+    ]
+    for key in preferred_keys:
+        if key in item:
+            price = parse_price_value(item.get(key))
+            if price is not None:
+                return price
+    fuzzy_tokens = ["成交", "收盤", "最新", "close", "price", "last"]
+    for key, value in item.items():
+        key_text = str(key).lower()
+        if any(token.lower() in key_text for token in fuzzy_tokens):
+            price = parse_price_value(value)
+            if price is not None:
+                return price
+    return None
+
+
+@st.cache_data(ttl=30)
+def get_twse_mis_quote_price(symbol: str):
+    """上市股票備援：TWSE MIS 即時行情。"""
+    code = symbol_to_code(symbol)
+    ts = int(time.time() * 1000)
+    url = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_{code}.tw&json=1&delay=0&_={ts}"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": f"https://mis.twse.com.tw/stock/fibest.jsp?stock={code}",
+        "Accept": "application/json,text/plain,*/*",
+    }
+    res = requests.get(url, headers=headers, timeout=5)
+    res.raise_for_status()
+    payload = res.json()
+    items = payload.get("msgArray", []) if isinstance(payload, dict) else []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_code = str(item.get("c") or item.get("code") or "").strip()
+        if item_code and item_code != code:
+            continue
+        price = extract_quote_price_from_item(item)
+        if price is not None:
+            return float(price), "TWSE MIS fallback"
+    raise ValueError(f"TWSE MIS 無法取得 {symbol} 價格")
+
+
+@st.cache_data(ttl=30)
+def get_tpex_openapi_quote_price(symbol: str):
+    """上櫃股票備援：TPEx OpenAPI 行情。"""
+    code = symbol_to_code(symbol)
+    url = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_quotes"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json,text/plain,*/*",
+    }
+    res = requests.get(url, headers=headers, timeout=8)
+    res.raise_for_status()
+    payload = res.json()
+    items = payload if isinstance(payload, list) else payload.get("data", []) if isinstance(payload, dict) else []
+    if isinstance(items, dict):
+        items = [items]
+    code_keys = [
+        "SecuritiesCode", "SecuritiesCompanyCode", "Code", "code", "stock_id",
+        "股票代號", "證券代號", "代號",
+    ]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        matched = False
+        for key in code_keys:
+            val = item.get(key)
+            if val is not None and str(val).strip() == code:
+                matched = True
+                break
+        if not matched:
+            matched = any(str(v).strip() == code for v in item.values())
+        if not matched:
+            continue
+        price = extract_quote_price_from_item(item)
+        if price is not None:
+            return float(price), "TPEx OpenAPI fallback"
+    raise ValueError(f"TPEx OpenAPI 無法取得 {symbol} 價格")
+
+
+@st.cache_data(ttl=30)
+def get_tw_official_quote_price(symbol: str):
+    """官方行情備援：上市優先 TWSE，上櫃優先 TPEx；失敗時互相嘗試。"""
+    market = get_symbol_market(symbol)
+    if market == "tw":
+        sources = [get_twse_mis_quote_price, get_tpex_openapi_quote_price]
+    elif market == "two":
+        sources = [get_tpex_openapi_quote_price, get_twse_mis_quote_price]
+    else:
+        sources = [get_twse_mis_quote_price, get_tpex_openapi_quote_price]
+    errors = []
+    for fn in sources:
+        try:
+            return fn(symbol)
+        except Exception as e:
+            errors.append(f"{fn.__name__}: {e}")
+    raise ValueError(f"官方備援行情無法取得 {symbol} 價格；" + "；".join(errors))
+
+
 @st.cache_data(ttl=30)
 def get_yfinance_fast_info_price(symbol: str):
     candidates = [str(symbol).strip().upper()] + [
@@ -596,7 +714,12 @@ def get_yfinance_fast_info_price(symbol: str):
         except Exception as e:
             last_error = f"{yf_symbol}: {e}"
             continue
-    raise ValueError(f"yfinance fast_info 無法取得 {symbol} 價格。最後錯誤：{last_error}")
+    try:
+        official_price, official_source = get_tw_official_quote_price(symbol)
+        return float(official_price), official_source
+    except Exception as e:
+        last_error = f"{last_error}；official fallback: {e}"
+    raise ValueError(f"yfinance fast_info / 官方備援皆無法取得 {symbol} 價格。最後錯誤：{last_error}")
 
 @st.cache_data(ttl=30)
 def get_yahoo_tw_quote_price(symbol: str):
@@ -706,6 +829,12 @@ def after_1330_price_logic(symbol, df, forced=False):
     except Exception:
         pass
     try:
+        official_price, official_source = get_tw_official_quote_price(symbol)
+        if official_price is not None and pd.notna(official_price):
+            return float(official_price), ("Forced 13:30 " + official_source) if forced else (official_source + " after 13:30")
+    except Exception:
+        pass
+    try:
         daily_close, daily_date, _ = get_yfinance_latest_daily_close(symbol)
         if daily_close is not None and pd.notna(daily_close):
             if last_hist_date is None or daily_date > last_hist_date:
@@ -732,7 +861,6 @@ def get_last_price(symbol, df, manager=None):
         raise ValueError("強制 WebSocket 模式，但尚未收到此股票的 WebSocket trades 成交價")
 
     if mode == "yfinance":
-        # 強制 yfinance 仍只在使用者手動切換/手動刷新後才會進入資料快照重建。
         return after_1330_price_logic(symbol, df, forced=True)
 
     # 盤中 09:00~13:30：只用富邦 WebSocket 即時價加入歷史資料運算；
@@ -1445,27 +1573,22 @@ def should_rebuild_market_snapshot(signature: str, can_push_now: bool = False) -
     """
     重建行情快照規則：
     1. 盤中 09:00~13:30：畫面可每 REFRESH_SEC 重算一次，但 yfinance 歷史資料由 @st.cache_data(ttl=3600) 控制每小時最多抓一次。
-    2. 13:30 後：不自動重抓，只有按「手動更新」才重抓 yfinance / Yahoo TW。
+    2. 13:30 後：不自動重抓，只有按「手動更新」才重抓 yfinance / Yahoo TW；若 yfinance 價格失敗，就走 TWSE / TPEx 官方備援。
     3. 一般 widget 變更：不重抓，只使用既有快照。
     """
-    manual_refresh = st.session_state.get("force_market_refresh", False)
-
-    if manual_refresh:
+    if st.session_state.get("force_market_refresh", False):
         return True, "手動更新"
 
-    # 13:30 後完全停止自動重抓；若沒有快照，也提示使用者手動更新。
     if is_after_1330():
         if st.session_state.market_snapshot is None:
             return False, "13:30 後請按手動更新抓取收盤資料"
         return False, "13:30 後停止自動抓取，等待手動更新"
 
-    # 盤前也不要自動打 yfinance；若需要盤前資料，按手動更新。
     if is_before_market_open():
         if st.session_state.market_snapshot is None:
             return False, "盤前請按手動更新抓取資料"
         return False, "盤前使用既有快照"
 
-    # 盤中第一次載入或分組/價格模式改變，需要建立快照。
     if st.session_state.market_snapshot is None:
         return True, "盤中首次載入"
     if st.session_state.market_snapshot_signature != signature:
@@ -1473,7 +1596,6 @@ def should_rebuild_market_snapshot(signature: str, can_push_now: bool = False) -
     if can_push_now:
         return True, "推播時段掃描"
 
-    # 盤中自動更新：只重算快照與 WebSocket 即時價；yfinance 歷史資料因 TTL=3600 不會一直打。
     if st.session_state.auto_refresh_enabled and not st.session_state.group_editor_unlocked and not st.session_state.editing_mode:
         last_at = st.session_state.market_snapshot_at
         if last_at is None:
@@ -1727,7 +1849,7 @@ with st.sidebar.expander("🕒 價格來源模式", expanded=True):
         if is_fubon_realtime_time():
             st.info("目前價格模式：自動；09:00~13:30 優先 WebSocket，歷史資料每小時快取")
         else:
-            st.info("目前價格模式：自動；13:30 後停止自動抓資料，需按手動更新")
+            st.info("目前價格模式：自動；13:30 後停止自動抓資料，需按手動更新；yfinance 失敗時走 TWSE/TPEx 備援")
     mode_col1, mode_col2 = st.columns(2)
     with mode_col1:
         ws_button_type = "primary" if current_mode == "websocket" else "secondary"
