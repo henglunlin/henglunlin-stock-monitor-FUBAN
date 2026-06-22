@@ -524,7 +524,7 @@ def download_stock_data(symbol):
 
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=30)
 def get_data(stocks):
     """
     集中取得股票歷史資料，搭配 session_state 避免每次 Streamlit rerun 都重抓。
