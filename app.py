@@ -8,6 +8,7 @@
 3. 新增 dashboard-top 錨點，「回到儀表板」可正常跳轉。
 4. 儀表板卡片與分類錨點改成真正 HTML。
 6. 圖片不存在時不會中斷，改顯示文字標題。
+7. 調整快取最佳實務：get_data 30秒快取，移除 st.session_state["data"] 快照，避免 WebSocket 即時價被舊快照卡住。
 """
 
 import re
@@ -527,9 +528,10 @@ def download_stock_data(symbol):
 @st.cache_data(ttl=30)
 def get_data(stocks):
     """
-    集中取得股票歷史資料，搭配 session_state 避免每次 Streamlit rerun 都重抓。
-    - get_data 本身快取 5 分鐘。
+    集中取得股票歷史資料。
+    - get_data 本身快取 30 秒，配合畫面 REFRESH_SEC=30。
     - download_stock_data 內層快取 1 小時，確保昨日之前歷史資料每小時最多重抓一次。
+    - 不再另外用 st.session_state["data"] 保存快照，避免 WebSocket 即時價被舊資料流程卡住。
     """
     result = {}
     for symbol in list(stocks):
@@ -1421,8 +1423,6 @@ col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 with col1:
     if st.button("🔄 手動更新即時資料 (清除快取)", width="stretch"):
         st.cache_data.clear()
-        st.session_state.pop("data", None)
-        st.session_state.pop("data_signature", None)
         st.rerun()
 with col2:
     auto_refresh = st.toggle("⏱️ 啟用自動更新 (30秒)", value=st.session_state.auto_refresh_enabled)
@@ -1450,7 +1450,7 @@ else:
     st.sidebar.info("目前為唯讀模式：輸入 PIN 後才能修改股票分組")
 
 tw_now = datetime.now(TW_TZ)
-st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}；昨日之前歷史資料快取：{HISTORY_CACHE_TTL // 60}分鐘；get_data快取：5分鐘")
+st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}；昨日之前歷史資料快取：{HISTORY_CACHE_TTL // 60}分鐘；get_data快取：30秒")
 rise_threshold = st.slider("儀表板漲幅達標門檻 (%)", min_value=5, max_value=9, value=5, step=1)
 
 manager = st.session_state.fubon_manager
@@ -1532,16 +1532,14 @@ if st.session_state.tg_push_enabled:
                     break
 
 # ===== 資料計算 =====
-# 用 session_state 保存資料快照，避免 slider / sidebar 之類的 widget rerun 時重抓資料。
+# 最佳實務：每次 rerun 都呼叫 get_data，但交給 @st.cache_data(ttl=30) 控制實際重抓頻率。
+# 不再另外用 st.session_state["data"] 快照保存，避免資料被鎖住導致 WebSocket 價格看似 5 分鐘才刷新。
 all_stocks_for_data = []
 for _stocks in st.session_state.stock_groups.values():
     all_stocks_for_data.extend(_stocks)
 all_stocks_for_data = list(dict.fromkeys(all_stocks_for_data))
 
-data_signature = json.dumps(st.session_state.stock_groups, ensure_ascii=False, sort_keys=True)
-if "data" not in st.session_state or st.session_state.get("data_signature") != data_signature:
-    st.session_state["data"] = get_data(tuple(all_stocks_for_data))
-    st.session_state["data_signature"] = data_signature
+stock_data_map = get_data(tuple(all_stocks_for_data))
 
 group_tables = {}
 group_up_summary = []
@@ -1552,7 +1550,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
     hit_names = []
     for symbol in stocks:
         try:
-            cached_stock_data = st.session_state["data"].get(symbol, {})
+            cached_stock_data = stock_data_map.get(symbol, {})
             if cached_stock_data.get("error"):
                 raise ValueError(cached_stock_data["error"])
             raw_df = cached_stock_data.get("data")
