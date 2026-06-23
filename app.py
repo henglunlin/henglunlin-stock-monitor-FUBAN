@@ -1539,7 +1539,8 @@ for _stocks in st.session_state.stock_groups.values():
     all_stocks_for_data.extend(_stocks)
 all_stocks_for_data = list(dict.fromkeys(all_stocks_for_data))
 
-stock_data_map = get_data(tuple(all_stocks_for_data))
+stock_data_map = get_data(tuple(all_stocks_for_data)), int(time.time() / 30)))
+
 
 group_tables = {}
 group_up_summary = []
