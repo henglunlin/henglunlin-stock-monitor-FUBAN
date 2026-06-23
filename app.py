@@ -526,7 +526,7 @@ def download_stock_data(symbol):
 
 
 @st.cache_data(ttl=30)
-def get_data(stocks):
+def get_data(stocks, _cache_buster=None):
     """
     集中取得股票歷史資料。
     - get_data 本身快取 30 秒，配合畫面 REFRESH_SEC=30。
@@ -1540,9 +1540,12 @@ for _stocks in st.session_state.stock_groups.values():
 all_stocks_for_data = list(dict.fromkeys(all_stocks_for_data))
 
 
+
 stock_data_map = get_data(
-    (tuple(all_stocks_for_data), int(time.time() / 30))
+    tuple(all_stocks_for_data),
+    int(time.time() / 30)
 )
+
 
 
 
