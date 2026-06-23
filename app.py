@@ -7,8 +7,8 @@
 2. 修正 APP_LOGO 字串少了結尾引號的語法錯誤。
 3. 新增 dashboard-top 錨點，「回到儀表板」可正常跳轉。
 4. 儀表板卡片與分類錨點改成真正 HTML。
+5. 加入 MACD 翻正指標與欄位。
 6. 圖片不存在時不會中斷，改顯示文字標題。
-7. 調整快取最佳實務：get_data 30秒快取，移除 st.session_state["data"] 快照，避免 WebSocket 即時價被舊快照卡住。
 """
 
 import re
@@ -41,7 +41,7 @@ st.set_page_config(layout="wide")
 # ===== 常數設定 =====
 TW_TZ = ZoneInfo("Asia/Taipei")
 REFRESH_SEC = 30
-HISTORY_CACHE_TTL = 3600  # 昨日之前歷史資料每小時最多重抓一次
+HISTORY_CACHE_TTL = 6000
 ENABLE_GAP_SIGNAL = True
 GROUP_EDIT_PIN = "1219"
 GROUPS_FILE = "stock_groups.json"
@@ -478,11 +478,11 @@ def check_telegram_push_command():
     return False
 
 # =============================================================================
-# yfinance：昨日之前歷史資料，每小時快取
+# yfinance：今日以前歷史資料
 # =============================================================================
 @st.cache_data(ttl=HISTORY_CACHE_TTL)
 def download_stock_data(symbol):
-    """昨日之前歷史資料使用 yfinance；今日即時價不使用 yfinance。此函式每小時最多重抓一次。"""
+    """今日以前歷史資料全部使用 yfinance；今日即時價不使用 yfinance。"""
     candidates = build_yfinance_candidates(symbol)
     last_error = ""
     for yf_symbol in candidates:
@@ -523,23 +523,6 @@ def download_stock_data(symbol):
         return df[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
     raise ValueError(f"無法取得 yfinance 歷史資料。已嘗試：{', '.join(candidates)}。最後錯誤：{last_error}")
 
-
-
-@st.cache_data(ttl=30)
-def get_data(stocks, _cache_buster=None):
-    """
-    集中取得股票歷史資料。
-    - get_data 本身快取 30 秒，配合畫面 REFRESH_SEC=30。
-    - download_stock_data 內層快取 1 小時，確保昨日之前歷史資料每小時最多重抓一次。
-    - 不再另外用 st.session_state["data"] 保存快照，避免 WebSocket 即時價被舊資料流程卡住。
-    """
-    result = {}
-    for symbol in list(stocks):
-        try:
-            result[symbol] = {"data": download_stock_data(symbol), "error": None}
-        except Exception as e:
-            result[symbol] = {"data": None, "error": str(e)}
-    return result
 
 def normalize_ohlc(df):
     if df is None or df.empty:
@@ -887,7 +870,7 @@ def compute_indicators(df, price):
     if df is None or df.empty:
         raise ValueError("下載資料為空")
     if len(df) < 26:
-        raise ValueError("歷史資料不足（至少需要 26 筆）")
+        raise ValueError("歷史資料不足（至少需要 26 筆，MACD 需要較長資料）")
 
     calc_df = df.copy().reset_index(drop=True)
     close = pd.to_numeric(calc_df["Close"].squeeze(), errors="coerce")
@@ -964,6 +947,23 @@ def compute_indicators(df, price):
     else:
         kd_signal = "-"
 
+    # MACD：以補入今日即時價後的 close 序列計算
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    dif = ema12 - ema26
+    dea = dif.ewm(span=9, adjust=False).mean()
+    macd_hist = dif - dea
+    if len(macd_hist.dropna()) < 2:
+        raise ValueError("MACD 計算資料不足")
+    macd_hist_t = float(macd_hist.iloc[-1])
+    macd_hist_y = float(macd_hist.iloc[-2])
+    if macd_hist_y <= 0 and macd_hist_t > 0:
+        macd_signal = "MACD翻正"
+    elif macd_hist_y >= 0 and macd_hist_t < 0:
+        macd_signal = "MACD翻負"
+    else:
+        macd_signal = "-"
+
     gap_signal = "-"
     today_low = price_val
     if ENABLE_GAP_SIGNAL and pd.notna(today_low) and pd.notna(yesterday_high) and today_low > yesterday_high:
@@ -978,6 +978,8 @@ def compute_indicators(df, price):
         "k": round(k_t, 1),
         "d": round(d_t, 1),
         "kd_signal": kd_signal,
+        "macd_hist": round(macd_hist_t, 4),
+        "macd_signal": macd_signal,
         "gap_signal": gap_signal,
     }
 
@@ -1450,7 +1452,7 @@ else:
     st.sidebar.info("目前為唯讀模式：輸入 PIN 後才能修改股票分組")
 
 tw_now = datetime.now(TW_TZ)
-st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}；昨日之前歷史資料快取：{HISTORY_CACHE_TTL // 60}分鐘；get_data快取：30秒")
+st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
 rise_threshold = st.slider("儀表板漲幅達標門檻 (%)", min_value=5, max_value=9, value=5, step=1)
 
 manager = st.session_state.fubon_manager
@@ -1532,23 +1534,6 @@ if st.session_state.tg_push_enabled:
                     break
 
 # ===== 資料計算 =====
-# 最佳實務：每次 rerun 都呼叫 get_data，但交給 @st.cache_data(ttl=30) 控制實際重抓頻率。
-# 不再另外用 st.session_state["data"] 快照保存，避免資料被鎖住導致 WebSocket 價格看似 5 分鐘才刷新。
-all_stocks_for_data = []
-for _stocks in st.session_state.stock_groups.values():
-    all_stocks_for_data.extend(_stocks)
-all_stocks_for_data = list(dict.fromkeys(all_stocks_for_data))
-
-
-
-stock_data_map = get_data(
-    tuple(all_stocks_for_data),
-    int(time.time() / 30)
-)
-
-
-
-
 group_tables = {}
 group_up_summary = []
 for group_name, stocks in st.session_state.stock_groups.items():
@@ -1558,10 +1543,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
     hit_names = []
     for symbol in stocks:
         try:
-            cached_stock_data = stock_data_map.get(symbol, {})
-            if cached_stock_data.get("error"):
-                raise ValueError(cached_stock_data["error"])
-            raw_df = cached_stock_data.get("data")
+            raw_df = download_stock_data(symbol)
             df = normalize_ohlc(raw_df)
             if df.empty:
                 raise ValueError("無法解析 yfinance 欄位格式")
@@ -1572,8 +1554,9 @@ for group_name, stocks in st.session_state.stock_groups.items():
             is_high_gain = data["pct"] >= 5
             has_kd_signal = data["kd_signal"] in ["黃金交叉", "即將黃金交叉"]
             has_gap_signal = data["gap_signal"] == "跳空"
+            has_macd_signal = data["macd_signal"] == "MACD翻正"
 
-            if is_high_gain or has_kd_signal or has_gap_signal:
+            if is_high_gain or has_kd_signal or has_gap_signal or has_macd_signal:
                 base_symbol = symbol.split('.')[0]
                 yahoo_url = f"https://tw.stock.yahoo.com/quote/{base_symbol}"
                 symbol_link = f'<a href="{yahoo_url}">{symbol}</a>'
@@ -1585,6 +1568,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                         f"📈 價格：{data['price']}\n"
                         f"🔥 漲幅：{data['pct']:+.2f}%\n"
                         f"📊 KD訊號：{data['kd_signal']}\n"
+                        f"🧭 MACD訊號：{data['macd_signal']} / MACD柱：{data['macd_hist']}\n"
                         f"🚀 跳空訊號：{data['gap_signal']}\n"
                         f"📡 價格來源：{price_source}"
                     )
@@ -1613,6 +1597,8 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "K值": data["k"],
                 "D值": f"{data['d']:.1f}",
                 "KD訊號": data["kd_signal"],
+                "MACD柱": f"{data['macd_hist']:.2f}",
+                "MACD訊號": data["macd_signal"],
                 "跳空訊號": data["gap_signal"],
                 "價格來源": price_source,
             })
@@ -1630,6 +1616,8 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "K值": "-",
                 "D值": "-",
                 "KD訊號": "-",
+                "MACD柱": "-",
+                "MACD訊號": "-",
                 "跳空訊號": str(e),
                 "價格來源": "-",
             })
@@ -1678,7 +1666,7 @@ for group_name, info in group_tables.items():
         table_df["代碼"] = table_df["代碼網址"]
     display_columns = [
         "代碼", "股票名稱", "價格", "昨收", "漲跌%", "MA位置", "MA排列",
-        "K值", "D值", "KD訊號", "跳空訊號", "價格來源",
+        "K值", "D值", "KD訊號", "MACD柱", "MACD訊號", "跳空訊號", "價格來源",
     ]
     st.dataframe(
         table_df[display_columns],
@@ -1701,5 +1689,4 @@ with st.sidebar.expander("🔍 WebSocket Debug", expanded=False):
 
 if st.session_state.auto_refresh_enabled and not st.session_state.group_editor_unlocked and not st.session_state.editing_mode:
     time.sleep(REFRESH_SEC)
-    st.cache_data.clear() 
     st.rerun()
