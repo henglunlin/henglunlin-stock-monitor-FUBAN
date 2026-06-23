@@ -1693,4 +1693,5 @@ with st.sidebar.expander("🔍 WebSocket Debug", expanded=False):
 
 if st.session_state.auto_refresh_enabled and not st.session_state.group_editor_unlocked and not st.session_state.editing_mode:
     time.sleep(REFRESH_SEC)
+    st.cache_data.clear() 
     st.rerun()
