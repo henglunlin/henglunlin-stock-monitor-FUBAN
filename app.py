@@ -41,7 +41,7 @@ st.set_page_config(layout="wide")
 # ===== 常數設定 =====
 TW_TZ = ZoneInfo("Asia/Taipei")
 REFRESH_SEC = 30
-HISTORY_CACHE_TTL = 6000
+HISTORY_CACHE_TTL = 3600
 ENABLE_GAP_SIGNAL = True
 GROUP_EDIT_PIN = "1219"
 GROUPS_FILE = "stock_groups.json"
