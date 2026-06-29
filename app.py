@@ -332,15 +332,10 @@ class FubonRealtimeManager:
             return None
 
     def _extract_tick_detail(self, msg):
-        """盡量從富邦 trades 訊息解析：單筆量、內外盤、買賣力累積。
-
-        不同 SDK / channel 版本欄位名稱可能略有差異，所以這裡保留多組候選欄位。
-        若欄位無法判斷，回傳 None，表格會顯示「- / 監控中」。
-        """
+        """解析富邦 trades 訊息：成交價、單筆量、內外盤。"""
         data = msg.get("data", {})
         if not isinstance(data, dict):
             data = {}
-
         symbol, price = self._extract_symbol_price(msg)
 
         volume_candidates = [
@@ -369,7 +364,6 @@ class FubonRealtimeManager:
         elif raw_type_upper in ["SELL", "S", "ASK", "內盤", "內盤(賣)", "賣", "2"]:
             last_trade_type = "內盤(賣)"
 
-        # 若沒有明確 tickType，就用成交價與買一/賣一嘗試判斷
         if last_trade_type is None and price is not None:
             bid = self._safe_float(data.get("bid") or data.get("bidPrice") or data.get("bestBidPrice") or msg.get("bid") or msg.get("bidPrice"))
             ask = self._safe_float(data.get("ask") or data.get("askPrice") or data.get("bestAskPrice") or msg.get("ask") or msg.get("askPrice"))
@@ -400,7 +394,6 @@ class FubonRealtimeManager:
             self.last_message_at = now
             if symbol:
                 self.messages[symbol] = {"time": now, "raw": msg}
-
                 status = self.tick_status.get(symbol, {
                     "last_ws_price": None,
                     "real_tick_volume": None,
@@ -409,7 +402,6 @@ class FubonRealtimeManager:
                     "total_sell_vol": 0,
                     "latest_large_order": None,
                 })
-
                 if price is not None:
                     self.prices[symbol] = price
                     status["last_ws_price"] = price
@@ -422,7 +414,6 @@ class FubonRealtimeManager:
                             status["total_buy_vol"] = int(status.get("total_buy_vol", 0) or 0) + tick_volume
                         elif last_trade_type == "內盤(賣)":
                             status["total_sell_vol"] = int(status.get("total_sell_vol", 0) or 0) + tick_volume
-
                 self.tick_status[symbol] = status
 
     def subscribe(self, symbol: str):
@@ -467,7 +458,6 @@ class FubonRealtimeManager:
                 "latest_large_order": None,
             }))
 
-        # 大單判斷放在讀取端，方便 UI 調整門檻後立即生效
         tick_volume = status.get("real_tick_volume")
         if tick_volume is not None and tick_volume >= threshold:
             latest = status.get("latest_large_order")
@@ -1796,8 +1786,8 @@ for group_name, info in group_tables.items():
     if not table_df.empty and "代碼網址" in table_df.columns:
         table_df["代碼"] = table_df["代碼網址"]
     display_columns = [
-        "代碼", "股票名稱", "價格", "昨收", "漲跌%", "MA位置", "MA排列",
-        "K值", "D值", "KD訊號", "跳空訊號", "價格來源",
+        "代碼", "股票名稱", "大單追蹤", "最新單筆", "內外盤", "外盤累積", "內盤累積",
+        "價格", "昨收", "漲跌%", "MA位置", "MA排列", "K值", "D值", "KD訊號", "跳空訊號", "價格來源",
     ]
     st.dataframe(
         table_df[display_columns],
