@@ -1432,7 +1432,7 @@ else:
 
 
 ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4, ctrl_col5 = st.columns(
-    [1.2, 1.25, 1.35, 1.25, 1.25],
+    [1.45, 1.05, 1.15, 1.25, 1.25],
     gap="medium",
     vertical_alignment="center",
 )
@@ -1454,14 +1454,14 @@ with ctrl_col2:
 
 with ctrl_col3:
     refresh_label_col, refresh_input_col = st.columns(
-        [0.75, 1.25],
+        [0.48, 0.82],
         gap="small",
         vertical_alignment="center",
     )
 
     with refresh_label_col:
         st.markdown(
-            "<div style='padding-top: 4px; white-space: nowrap;'>刷新秒數</div>",
+            "<div style='white-space:nowrap; font-size:14px; padding-top:2px;'>刷新秒數</div>",
             unsafe_allow_html=True,
         )
 
