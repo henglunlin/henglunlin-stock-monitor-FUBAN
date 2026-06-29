@@ -20,6 +20,7 @@ import base64
 import tempfile
 import threading
 import requests
+import random
 from html import escape
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -54,7 +55,6 @@ def get_secret_or_default(key: str, default: str = ""):
         return st.secrets.get(key, default)
     except Exception:
         return default
-
 
 # ===== Telegram 設定 =====
 TELEGRAM_BOT_TOKEN = get_secret_or_default("TELEGRAM_BOT_TOKEN", "")
@@ -105,16 +105,13 @@ html { scroll-behavior: smooth; }
 def symbol_to_code(symbol: str) -> str:
     return str(symbol).strip().upper().split(".")[0]
 
-
 def yahoo_quote_url(symbol: str) -> str:
     code = symbol_to_code(symbol)
     return f"https://tw.stock.yahoo.com/quote/{code}"
 
-
 def make_anchor_id(group_name: str) -> str:
     anchor = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", group_name).strip("-")
     return f"group-{anchor}"
-
 
 def normalize_symbol_quick(input_text: str):
     s = str(input_text).strip().upper()
@@ -127,7 +124,6 @@ def normalize_symbol_quick(input_text: str):
             return f"{s}.TWO"
         return f"{s}.TW"
     return s
-
 
 def build_yfinance_candidates(symbol: str):
     raw = str(symbol).strip().upper()
@@ -148,7 +144,6 @@ def build_yfinance_candidates(symbol: str):
             result.append(item)
     return result
 
-
 def normalize_symbols_from_text(text: str):
     if not text:
         return []
@@ -168,7 +163,6 @@ def normalize_symbols_from_text(text: str):
             seen.add(normalized)
             result.append(normalized)
     return result
-
 
 def compact_name_list(names, max_show=3):
     names = [str(x).strip() for x in names if str(x).strip()]
@@ -373,20 +367,16 @@ def load_stock_groups():
             pass
     return copy.deepcopy(DEFAULT_STOCK_GROUPS)
 
-
 def save_stock_groups(groups):
     with open(GROUPS_FILE, "w", encoding="utf-8") as f:
         json.dump(groups, f, ensure_ascii=False, indent=2)
 
-
 def ensure_backup_dir():
     os.makedirs(BACKUP_DIR, exist_ok=True)
-
 
 def create_backup_filename():
     tw_now = datetime.now(TW_TZ)
     return f"stock_groups_backup_{tw_now.strftime('%Y%m%d_%H%M%S')}.json"
-
 
 def save_backup_snapshot(groups):
     ensure_backup_dir()
@@ -395,7 +385,6 @@ def save_backup_snapshot(groups):
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(groups, f, ensure_ascii=False, indent=2)
     return file_path
-
 
 def list_backup_files():
     if not os.path.exists(BACKUP_DIR):
@@ -408,7 +397,6 @@ def list_backup_files():
                 files.append((name, os.path.getmtime(full_path)))
     files.sort(key=lambda x: x[1], reverse=True)
     return [name for name, _ in files]
-
 
 def validate_and_normalize_group_json(data):
     if not isinstance(data, dict) or not data:
@@ -448,7 +436,6 @@ def send_telegram_message(text: str):
             st.error(f"Telegram 傳送失敗，API 回傳：{res.text}")
     except Exception as e:
         st.error(f"Telegram 連線失敗: {e}")
-
 
 def check_telegram_push_command():
     if not TELEGRAM_BOT_TOKEN:
@@ -522,7 +509,6 @@ def download_stock_data(symbol):
         return df[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
     raise ValueError(f"無法取得 yfinance 歷史資料。已嘗試：{', '.join(candidates)}。最後錯誤：{last_error}")
 
-
 def normalize_ohlc(df):
     if df is None or df.empty:
         return pd.DataFrame()
@@ -532,13 +518,11 @@ def normalize_ohlc(df):
         return df[keep_cols].copy()
     return pd.DataFrame()
 
-
 def is_fubon_realtime_time():
     now = datetime.now(TW_TZ).time()
     start = datetime.strptime("09:00", "%H:%M").time()
     end = datetime.strptime("13:30", "%H:%M").time()
     return start <= now < end
-
 
 def parse_price_value(value):
     if value is None:
@@ -562,7 +546,6 @@ def parse_price_value(value):
     except Exception:
         return None
 
-
 def get_yfinance_fast_info_price(symbol: str):
     candidates = [str(symbol).strip().upper()] + [
         s for s in build_yfinance_candidates(symbol)
@@ -583,7 +566,6 @@ def get_yfinance_fast_info_price(symbol: str):
             last_error = f"{yf_symbol}: {e}"
             continue
     raise ValueError(f"yfinance fast_info 無法取得 {symbol} 價格。最後錯誤：{last_error}")
-
 
 @st.cache_data(ttl=30)
 def get_yahoo_tw_quote_price(symbol: str):
@@ -627,7 +609,6 @@ def get_yahoo_tw_quote_price(symbol: str):
         last_error = f"{yahoo_symbol}: 找不到可用價格欄位"
     raise ValueError(f"Yahoo TW 無法取得 {symbol} 價格。最後錯誤：{last_error}")
 
-
 @st.cache_data(ttl=30)
 def get_yfinance_latest_daily_close(symbol: str):
     last_error = ""
@@ -657,7 +638,6 @@ def get_yfinance_latest_daily_close(symbol: str):
         last_row = daily_df.iloc[-1]
         return float(last_row["Close"]), pd.to_datetime(last_row["Date"]).date(), yf_symbol
     raise ValueError(f"yfinance daily 無法取得 {symbol} 最新收盤價。最後錯誤：{last_error}")
-
 
 def after_1330_price_logic(symbol, df, forced=False):
     last_hist_close = None
@@ -698,7 +678,6 @@ def after_1330_price_logic(symbol, df, forced=False):
     if last_hist_close is not None:
         return last_hist_close, "Forced 13:30 history fallback" if forced else "history after 13:30"
     raise ValueError("無法取得 13:30 後價格")
-
 
 def get_last_price(symbol, df, manager=None):
     mode = st.session_state.get("price_source_override", "auto")
@@ -757,7 +736,6 @@ def load_stock_name_map(file_path: str = STOCK_NAME_FILE) -> dict:
                 name_map[symbol_to_code(symbol)] = name
     return name_map
 
-
 @st.cache_data(ttl=86400)
 def get_stock_name(symbol: str) -> str:
     name_map = load_stock_name_map(STOCK_NAME_FILE)
@@ -785,7 +763,6 @@ def get_stock_name(symbol: str) -> str:
         pass
     return code
 
-
 def normalize_lookup_symbol(raw_symbol: str) -> str:
     s = str(raw_symbol).strip().upper()
     if not s:
@@ -794,7 +771,6 @@ def normalize_lookup_symbol(raw_symbol: str) -> str:
         return s
     normalized = normalize_symbol_quick(s)
     return normalized or s
-
 
 @st.cache_data(ttl=86400)
 def load_stock_lookup_maps(file_path: str = STOCK_NAME_FILE) -> dict:
@@ -827,7 +803,6 @@ def load_stock_lookup_maps(file_path: str = STOCK_NAME_FILE) -> dict:
             name_to_symbol[stock_name] = symbol
             name_to_symbol[stock_name.replace(" ", "")] = symbol
     return {"code_to_name": code_to_name, "code_to_symbol": code_to_symbol, "name_to_symbol": name_to_symbol}
-
 
 def resolve_stock_query(input_text: str):
     q_raw = str(input_text).strip()
@@ -946,7 +921,6 @@ def compute_indicators(df, price):
     else:
         kd_signal = "-"
 
-
     gap_signal = "-"
     today_low = price_val
     if ENABLE_GAP_SIGNAL and pd.notna(today_low) and pd.notna(yesterday_high) and today_low > yesterday_high:
@@ -976,7 +950,6 @@ def format_color(val):
         return f"{val:.2f}%"
     return val
 
-
 def format_k(val):
     if isinstance(val, (int, float)):
         if val >= 74:
@@ -986,12 +959,10 @@ def format_k(val):
         return f"🟢 {val:.1f}"
     return val
 
-
 def format_gap(val):
     if val == "跳空":
         return "🔴 跳空"
     return "-"
-
 
 def build_top3_html(valid_stock_stats):
     if not valid_stock_stats:
@@ -1010,9 +981,7 @@ def build_top3_html(valid_stock_stats):
         )
     return " | ".join(parts)
 
-
 def render_summary_dashboard(group_up_summary, rise_threshold):
-    # 目標錨點：讓「回到儀表板」可以跳到這裡
     st.markdown('<div id="dashboard-top" style="scroll-margin-top: 90px;"></div>', unsafe_allow_html=True)
     st.markdown("### 📌 漲幅儀表板")
     st.caption(f"目前儀表板統計門檻：漲幅 ≥ {rise_threshold}%")
@@ -1102,18 +1071,14 @@ if "_quick_add_success_message" in st.session_state:
     st.toast(st.session_state._quick_add_success_message)
     del st.session_state._quick_add_success_message
 
-
 def set_next_selected_group(group_name: str):
     st.session_state._next_selected_group = group_name
-
 
 def enter_edit_mode():
     st.session_state.editing_mode = True
 
-
 def leave_edit_mode():
     st.session_state.editing_mode = False
-
 
 def sync_editor_fields_from_selected_group():
     groups = st.session_state.stock_groups
@@ -1137,7 +1102,6 @@ def get_fubon_pfx_base64():
         return st.secrets["fubon"]["pfx_base64"]
     except Exception:
         return ""
-
 
 def render_fubon_login():
     st.sidebar.markdown("## 🔑 富邦 WebSocket 即時價")
@@ -1219,7 +1183,6 @@ def render_group_editor_lock():
             st.rerun()
         else:
             st.sidebar.error("PIN 錯誤")
-
 
 def render_stock_group_editor():
     st.sidebar.markdown("## 🛠️ 股票分組編輯")
@@ -1661,6 +1624,87 @@ with st.sidebar.expander("🔍 WebSocket Debug", expanded=False):
     else:
         st.caption("尚未收到此代碼的 WebSocket 訊息")
 
+
+# =============================================================================
+# 單檔盤中即時監控 (大單偵測)
+# =============================================================================
+st.divider()
+st.markdown("## ⚡ 單檔盤中即時監控 (大單偵測)")
+
+with st.expander("展開即時大單監控面板", expanded=False):
+    monitor_col1, monitor_col2 = st.columns(2)
+    with monitor_col1:
+        target_symbol = st.text_input("輸入監控代碼 (例如: 2330)", value="2330")
+    with monitor_col2:
+        large_order_threshold = st.number_input("大單警示門檻 (張)", min_value=1, value=50, step=10)
+
+    # ---------------------------------------------------------
+    # ⚠️ 以下為缺失函數與狀態的模擬 (Mock) 防呆資料
+    # 您目前版本的 FubonRealtimeManager 尚未包含逐筆量與內外盤的完整解析。
+    # 實際應用時，請在 Manager 內補全解析，並替換以下邏輯。
+    # sdk = client.get_sdk()
+    # snapshot_price, snapshot_volume, snapshot_raw = get_snapshot_price_and_volume(sdk, target_symbol)
+    
+    mock_status = {
+        "last_ws_price": random.uniform(100, 1000) if target_symbol else 100.0,
+        "real_tick_volume": random.randint(1, 100),
+        "last_trade_type": random.choice(["外盤(買)", "內盤(賣)"]),
+        "total_buy_vol": random.randint(1000, 5000),
+        "total_sell_vol": random.randint(1000, 5000),
+        "latest_large_order": None
+    }
+    snapshot_price = mock_status["last_ws_price"]
+
+    if random.random() > 0.5:
+        mock_status["latest_large_order"] = {
+            "time": datetime.now(TW_TZ),
+            "price": mock_status["last_ws_price"],
+            "volume": random.randint(large_order_threshold, large_order_threshold + 200),
+            "type": mock_status["last_trade_type"]
+        }
+    # ---------------------------------------------------------
+
+    if mock_status.get("last_ws_price") is not None:
+        main_price = mock_status["last_ws_price"]
+    elif snapshot_price is not None:
+        main_price = snapshot_price
+    else:
+        main_price = None
+
+    st.markdown(f"### 📊 {target_symbol} 盤中即時狀態")
+
+    # 1. 🚨 固定的專屬大單警示區 (加入 Placeholder 修復切換閃退問題)
+    st.markdown("#### 🚨 專屬大單警示區")
+    alert_placeholder = st.empty()
+    large_order = mock_status.get("latest_large_order")
+
+    with alert_placeholder.container():
+        if large_order:
+            lo_time = large_order['time'].strftime('%H:%M:%S')
+            lo_price = large_order['price']
+            lo_vol = large_order['volume']
+            lo_type = large_order['type']
+
+            if lo_type == "外盤(買)":
+                st.success(f"🚀 **大單敲進！** {lo_time} 於 **{lo_price:.2f}** 買入 **{lo_vol}** 張！ 🔥", icon="🚀")
+            elif lo_type == "內盤(賣)":
+                st.error(f"📉 **大單倒貨！** {lo_time} 於 **{lo_price:.2f}** 賣出 **{lo_vol}** 張！ ⚠️", icon="📉")
+            else:
+                st.warning(f"🔔 **大單觸發！** {lo_time} 於 **{lo_price:.2f}** 成交 **{lo_vol}** 張 (內外盤不明)。", icon="🔔")
+        else:
+            st.info(f"⏳ 目前尚未偵測到大於 {large_order_threshold} 張的單筆成交，持續監控中...", icon="👁️‍🗨️")
+
+    # 2. 📈 第一排：大單與內外盤量
+    st.markdown("#### 📈 內外盤籌碼累積")
+    b1, b2, b3, b4 = st.columns(4)
+    b1.metric("真實跳動成交", "-" if mock_status.get("real_tick_volume") is None else f"{mock_status['real_tick_volume']} 張")
+    b2.metric("最新單筆內外盤", mock_status.get("last_trade_type", "-"))
+    b3.metric("總外盤累積 (買力)", mock_status.get("total_buy_vol", 0))
+    b4.metric("總內盤累積 (賣力)", mock_status.get("total_sell_vol", 0))
+
+# =============================================================================
+# 自動更新 (保持在程式最底端)
+# =============================================================================
 if st.session_state.auto_refresh_enabled and not st.session_state.group_editor_unlocked and not st.session_state.editing_mode:
     time.sleep(REFRESH_SEC)
     st.rerun()
