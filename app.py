@@ -1441,6 +1441,7 @@ else:
 tw_now = datetime.now(TW_TZ)
 st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
 # 用一個自訂 key 的 container 包住它
+input_col, space_col = st.columns([0.15, 0.85])
 with st.container(key="wide-number-input"):
     rise_threshold = st.number_input("漲幅門檻 (%)", min_value=0.00, value=5.00, step=1.00, format="%.2f")
 
