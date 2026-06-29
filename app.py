@@ -707,7 +707,7 @@ def get_yfinance_fast_info_price(symbol: str):
     raise ValueError(f"yfinance fast_info 無法取得 {symbol} 價格。最後錯誤：{last_error}")
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=1)
 def get_yahoo_tw_quote_price(symbol: str):
     headers = {
         "User-Agent": "Mozilla/5.0",
@@ -750,7 +750,7 @@ def get_yahoo_tw_quote_price(symbol: str):
     raise ValueError(f"Yahoo TW 無法取得 {symbol} 價格。最後錯誤：{last_error}")
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=1)
 def get_yfinance_latest_daily_close(symbol: str):
     last_error = ""
     for yf_symbol in build_yfinance_candidates(symbol):
