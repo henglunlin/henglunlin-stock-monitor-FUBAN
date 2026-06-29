@@ -98,7 +98,7 @@ html { scroll-behavior: smooth; }
 /* 👇 修改這裡：限制這個輸入框的最大寬度 */
 div.wide-number-input [data-testid="stNumberInput"] {
     width: 100% !important;
-    max-width: 250px !important;  /* 👈 可以自由調整這裡的像素值，數值越小越窄 */
+    max-width: 150px !important;  /* 👈 可以自由調整這裡的像素值，數值越小越窄 */
 }
 </style>
 """,
