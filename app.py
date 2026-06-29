@@ -1431,8 +1431,8 @@ else:
 
 
 
-ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4, ctrl_col5 = st.columns(
-    [1.45, 1.05, 1.15, 1.25, 1.25],
+ctrl_col1, ctrl_col2, ctrl_col3_label, ctrl_col3_input, ctrl_col4, ctrl_col5 = st.columns(
+    [1.45, 1.05, 0.45, 0.85, 1.25, 1.25],
     gap="medium",
     vertical_alignment="center",
 )
@@ -1449,32 +1449,20 @@ with ctrl_col2:
         help="開啟後會依照刷新秒數重新整理；WebSocket 即時價會跟著此秒數更新畫面。",
     )
     if auto_refresh != st.session_state.auto_refresh_enabled:
-        st.session_state.auto_refresh_enabled = auto_refresh
-        st.rerun()
-
-with ctrl_col3:
-    refresh_label_col, refresh_input_col = st.columns(
-        [0.48, 0.82],
-        gap="small",
-        vertical_alignment="center",
+        st.session_state.auto_refresh_enabled = autodiv style='white-space:nowrap; font-size:14px; padding-top:6px;'>刷新秒數</div>",        st.session_state.auto_refresh_enabled = auto_refresh
+        unsafe_allow_html=True,
     )
 
-    with refresh_label_col:
-        st.markdown(
-            "<div style='white-space:nowrap; font-size:14px; padding-top:2px;'>刷新秒數</div>",
-            unsafe_allow_html=True,
-        )
-
-    with refresh_input_col:
-        st.number_input(
-            "刷新秒數",
-            min_value=1,
-            max_value=300,
-            step=1,
-            key="refresh_sec",
-            label_visibility="collapsed",
-            help="自動刷新間隔秒數，預設 3 秒。WebSocket 畫面更新也會依照此秒數。",
-        )
+with ctrl_col3_input:
+    st.number_input(
+        "刷新秒數",
+        min_value=1,
+        max_value=300,
+        step=1,
+        key="refresh_sec",
+        label_visibility="collapsed",
+        help="自動刷新間隔秒數，預設 3 秒。WebSocket 畫面更新也會依照此秒數。",
+    )
 
 with ctrl_col4:
     tg_push = st.toggle(
@@ -1495,6 +1483,10 @@ with ctrl_col5:
     if sched_push != st.session_state.scheduled_push_enabled:
         st.session_state.scheduled_push_enabled = sched_push
         st.rerun()
+        st.rerun()
+
+with ctrl_col3_label:
+    st.markdown(
 
 
 gc.collect()
