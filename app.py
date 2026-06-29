@@ -94,12 +94,6 @@ html { scroll-behavior: smooth; }
 .back-to-dashboard-btn:hover { background: #eaeaea; }
 .ws-ok { color: #16a34a; font-weight: 700; }
 .ws-bad { color: #dc2626; font-weight: 700; }
-
-/* 👇 修改這裡：限制這個輸入框的最大寬度 */
-div.wide-number-input [data-testid="stNumberInput"] {
-    width: 100% !important;
-    max-width: 150px !important;  /* 👈 可以自由調整這裡的像素值，數值越小越窄 */
-}
 </style>
 """,
     unsafe_allow_html=True,
