@@ -95,10 +95,10 @@ html { scroll-behavior: smooth; }
 .ws-ok { color: #16a34a; font-weight: 700; }
 .ws-bad { color: #dc2626; font-weight: 700; }
 
-/* 修正後：只有在指定容器內的 number_input 才會被拉寬 */
+/* 👇 修改這裡：限制這個輸入框的最大寬度 */
 div.wide-number-input [data-testid="stNumberInput"] {
     width: 100% !important;
-    max-width: 100% !important;
+    max-width: 250px !important;  /* 👈 可以自由調整這裡的像素值，數值越小越窄 */
 }
 </style>
 """,
