@@ -1436,7 +1436,7 @@ tw_now = datetime.now(TW_TZ)
 st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # 將輸入框明確放進左側較窄的 input_col 欄位中
-input_col, space_col = st.columns([0.15, 0.85])
+input_col, space_col = st.columns([0.15, 0.75])
 with input_col:
     rise_threshold = st.number_input("漲幅門檻 (%)", min_value=0.00, value=5.00, step=1.00, format="%.2f")
 
