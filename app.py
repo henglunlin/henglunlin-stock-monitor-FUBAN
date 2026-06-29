@@ -41,8 +41,9 @@ st.set_page_config(layout="wide")
 
 # ===== 常數設定 =====
 TW_TZ = ZoneInfo("Asia/Taipei")
-REFRESH_SEC = 30
-HISTORY_CACHE_TTL = 3600
+REFRESH_SEC = 3
+YFINANCE_HISTORY_CACHE_TTL_SEC = 60 * 60  # yfinance 今日以前歷史資料每小時更新一次
+HISTORY_CACHE_TTL = YFINANCE_HISTORY_CACHE_TTL_SEC
 ENABLE_GAP_SIGNAL = True
 GROUP_EDIT_PIN = "1219"
 GROUPS_FILE = "stock_groups.json"
@@ -481,11 +482,16 @@ def check_telegram_push_command():
 # =============================================================================
 # yfinance：今日以前歷史資料
 # =============================================================================
-@st.cache_data(ttl=HISTORY_CACHE_TTL)
-def download_stock_data(symbol):
-    """今日以前歷史資料全部使用 yfinance；今日即時價不使用 yfinance。"""
+@st.cache_data(ttl=YFINANCE_HISTORY_CACHE_TTL_SEC)
+def _download_stock_data_yfinance_history_cached(symbol: str, today_str: str):
+    """今日以前歷史資料全部使用 yfinance；今日以前資料每小時抓一次並快取。
+
+    today_str 放入參數是為了讓 Streamlit cache key 每天切換，避免跨日後仍拿到昨日快取。
+    """
     candidates = build_yfinance_candidates(symbol)
     last_error = ""
+    today = pd.to_datetime(today_str).date()
+
     for yf_symbol in candidates:
         try:
             df = yf.download(
@@ -499,31 +505,48 @@ def download_stock_data(symbol):
         except Exception as e:
             last_error = f"{yf_symbol}: {e}"
             continue
+
         if df is None or df.empty:
             last_error = f"{yf_symbol}: yfinance 無資料"
             continue
+
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+
         df = df.reset_index()
         date_col = "Date" if "Date" in df.columns else "Datetime" if "Datetime" in df.columns else df.columns[0]
         df = df.rename(columns={date_col: "Date"})
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df = df.dropna(subset=["Date"])
-        today = datetime.now(TW_TZ).date()
+
+        # 只保留今日以前資料；今日價格由 WebSocket / 今日價格邏輯處理
         df = df[df["Date"].dt.date < today]
+
         required_cols = ["Open", "High", "Low", "Close", "Volume"]
         if not set(required_cols).issubset(df.columns):
             last_error = f"{yf_symbol}: 缺少 OHLCV 欄位"
             continue
+
         for col in required_cols:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+
         df = df.dropna(subset=["Open", "High", "Low", "Close"])
         if len(df) < 26:
             last_error = f"{yf_symbol}: 歷史資料不足 {len(df)} 筆"
             continue
+
         return df[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
+
     raise ValueError(f"無法取得 yfinance 歷史資料。已嘗試：{', '.join(candidates)}。最後錯誤：{last_error}")
 
+
+def download_stock_data(symbol):
+    """取得 yfinance 今日以前歷史資料。
+
+    快取策略：今日以前歷史資料每小時更新一次；今日價格不在這裡處理。
+    """
+    today_str = datetime.now(TW_TZ).strftime("%Y-%m-%d")
+    return _download_stock_data_yfinance_history_cached(symbol, today_str)
 
 def normalize_ohlc(df):
     if df is None or df.empty:
@@ -1058,6 +1081,8 @@ def render_summary_dashboard(group_up_summary, rise_threshold):
 # =============================================================================
 if "auto_refresh_enabled" not in st.session_state:
     st.session_state.auto_refresh_enabled = False
+if "refresh_sec" not in st.session_state:
+    st.session_state.refresh_sec = REFRESH_SEC
 if "tg_push_enabled" not in st.session_state:
     st.session_state.tg_push_enabled = False
 if "scheduled_push_enabled" not in st.session_state:
@@ -1410,10 +1435,22 @@ with col1:
         st.cache_data.clear()
         st.rerun()
 with col2:
-    auto_refresh = st.toggle("⏱️ 啟用自動更新 (30秒)", value=st.session_state.auto_refresh_enabled)
+    auto_refresh = st.toggle(
+        "⏱️ 啟用自動更新",
+        value=st.session_state.auto_refresh_enabled,
+        help="開啟後會依照下方刷新秒數重新整理；WebSocket 即時價會跟著此秒數更新畫面。",
+    )
     if auto_refresh != st.session_state.auto_refresh_enabled:
         st.session_state.auto_refresh_enabled = auto_refresh
         st.rerun()
+    st.number_input(
+        "刷新秒數",
+        min_value=1,
+        max_value=300,
+        step=1,
+        key="refresh_sec",
+        help="自動刷新間隔秒數，預設 3 秒。WebSocket 畫面更新也會依照此秒數。",
+    )
 with col3:
     tg_push = st.toggle("📲 Telegram 推送開關", value=st.session_state.tg_push_enabled, help="必須開啟此選項，機器人才會發送推播")
     if tg_push != st.session_state.tg_push_enabled:
@@ -1675,5 +1712,6 @@ with st.sidebar.expander("🔍 WebSocket Debug", expanded=False):
         st.caption("尚未收到此代碼的 WebSocket 訊息")
 
 if st.session_state.auto_refresh_enabled and not st.session_state.group_editor_unlocked and not st.session_state.editing_mode:
-    time.sleep(REFRESH_SEC)
+    refresh_sec = max(1, int(st.session_state.get("refresh_sec", REFRESH_SEC)))
+    time.sleep(refresh_sec)
     st.rerun()
