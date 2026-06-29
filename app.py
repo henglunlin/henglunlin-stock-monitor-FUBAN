@@ -95,8 +95,8 @@ html { scroll-behavior: smooth; }
 .ws-ok { color: #16a34a; font-weight: 700; }
 .ws-bad { color: #dc2626; font-weight: 700; }
 
-/* 解除 number_input 的最大寬度限制 */
-[data-testid="stNumberInput"] {
+/* 修正後：只有在指定容器內的 number_input 才會被拉寬 */
+div.wide-number-input [data-testid="stNumberInput"] {
     width: 100% !important;
     max-width: 100% !important;
 }
@@ -1440,7 +1440,9 @@ else:
 
 tw_now = datetime.now(TW_TZ)
 st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
-rise_threshold = st.number_input("漲幅門檻 (%)", min_value=0.00, value=5.00, step=1.00, format="%.2f")
+# 用一個自訂 key 的 container 包住它
+with st.container(key="wide-number-input"):
+    rise_threshold = st.number_input("漲幅門檻 (%)", min_value=0.00, value=5.00, step=1.00, format="%.2f")
 
 manager = st.session_state.fubon_manager
 if st.session_state.fubon_logged_in:
