@@ -1429,7 +1429,13 @@ else:
         unsafe_allow_html=True,
     )
 
-col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+
+ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4, ctrl_col5 = st.columns(
+    [1.2, 1.25, 1.35, 1.25, 1.25],
+    gap="medium",
+    vertical_alignment="center",
+)
+
 with col1:
     if st.button("🔄 手動更新即時資料 (清除快取)", width="stretch"):
         st.cache_data.clear()
