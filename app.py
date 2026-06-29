@@ -1435,7 +1435,10 @@ with col1:
         st.cache_data.clear()
         st.rerun()
 with col2:
-    refresh_toggle_col, refresh_sec_col = st.columns([1.15, 0.85], vertical_alignment="center")
+    refresh_toggle_col, refresh_setting_col = st.columns(
+        [1.15, 1.25],
+        vertical_alignment="center"
+    )
 
     with refresh_toggle_col:
         auto_refresh = st.toggle(
@@ -1447,15 +1450,25 @@ with col2:
             st.session_state.auto_refresh_enabled = auto_refresh
             st.rerun()
 
-    with refresh_sec_col:
-        st.number_input(
-            "刷新秒數",
-            min_value=1,
-            max_value=300,
-            step=1,
-            key="refresh_sec",
-            help="自動刷新間隔秒數，預設 3 秒。WebSocket 畫面更新也會依照此秒數。",
+    with refresh_setting_col:
+        refresh_label_col, refresh_input_col = st.columns(
+            [0.75, 1.25],
+            vertical_alignment="center"
         )
+
+        with refresh_label_col:
+            st.markdown("刷新秒數")
+
+        with refresh_input_col:
+            st.number_input(
+                "刷新秒數",
+                min_value=1,
+                max_value=300,
+                step=1,
+                key="refresh_sec",
+                label_visibility="collapsed",
+                help="自動刷新間隔秒數，預設 3 秒。WebSocket 畫面更新也會依照此秒數。",
+            )
 with col3:
     tg_push = st.toggle("📲 Telegram 推送開關", value=st.session_state.tg_push_enabled, help="必須開啟此選項，機器人才會發送推播")
     if tg_push != st.session_state.tg_push_enabled:
