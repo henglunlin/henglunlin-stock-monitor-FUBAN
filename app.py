@@ -1434,7 +1434,7 @@ else:
 
 tw_now = datetime.now(TW_TZ)
 st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
-rise_threshold = st.slider("儀表板漲幅達標門檻 (%)", min_value=5, max_value=9, value=5, step=1)
+rise_threshold = st.number_input("漲幅門檻 (%)", min_value=0.00, value=5.00, step=1.00, format="%.2f")
 
 manager = st.session_state.fubon_manager
 if st.session_state.fubon_logged_in:
