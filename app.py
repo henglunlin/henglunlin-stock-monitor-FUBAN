@@ -1431,8 +1431,9 @@ else:
 
 
 
-ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4, ctrl_col5 = st.columns(
-    [1.45, 1.05, 0.85, 1.25, 1.25],
+# 控制列排版：手動更新｜自動更新 + 刷新秒數｜Telegram｜定時推送
+ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns(
+    [1.35, 2.25, 1.45, 1.45],
     gap="medium",
     vertical_alignment="center",
 )
@@ -1443,30 +1444,41 @@ with ctrl_col1:
         st.rerun()
 
 with ctrl_col2:
-    auto_refresh = st.toggle(
-        "⏱️ 啟用自動更新",
-        value=st.session_state.auto_refresh_enabled,
-        help="開啟後會依照刷新秒數重新整理；WebSocket 即時價會跟著此秒數更新畫面。",
-    )
-
-    if auto_refresh != st.session_state.auto_refresh_enabled:
-        st.session_state.auto_refresh_enabled = auto_refresh
-        st.rerun()
-
-with ctrl_col3:
-    refresh_label_col, refresh_input_col = st.columns(
-        [0.38, 0.62],
+    auto_col, label_col, input_col = st.columns(
+        [1.05, 0.42, 0.78],
         gap="small",
         vertical_alignment="center",
     )
 
-    with refresh_label_col:
+    with auto_col:
+        auto_refresh = st.toggle(
+            "⏱️ 啟用自動更新",
+            value=st.session_state.auto_refresh_enabled,
+            help="開啟後會依照刷新秒數重新整理；WebSocket 即時價會跟著此秒數更新畫面。",
+        )
+
+        if auto_refresh != st.session_state.auto_refresh_enabled:
+            st.session_state.auto_refresh_enabled = auto_refresh
+            st.rerun()
+
+    with label_col:
         st.markdown(
-            "<div style='white-space:nowrap; font-size:14px; line-height:20px;'>刷新秒數</div>",
+            """
+            <div style="
+                white-space: nowrap;
+                font-size: 14px;
+                line-height: 38px;
+                margin: 0;
+                padding: 0;
+                text-align: right;
+            ">
+                刷新秒數
+            </div>
+            """,
             unsafe_allow_html=True,
         )
 
-    with refresh_input_col:
+    with input_col:
         st.number_input(
             "刷新秒數",
             min_value=1,
@@ -1477,7 +1489,7 @@ with ctrl_col3:
             help="自動刷新間隔秒數，預設 3 秒。WebSocket 畫面更新也會依照此秒數。",
         )
 
-with ctrl_col4:
+with ctrl_col3:
     tg_push = st.toggle(
         "📲 Telegram 推送開關",
         value=st.session_state.tg_push_enabled,
@@ -1488,7 +1500,7 @@ with ctrl_col4:
         st.session_state.tg_push_enabled = tg_push
         st.rerun()
 
-with ctrl_col5:
+with ctrl_col4:
     sched_push = st.toggle(
         "⏰ 定時推送模式",
         value=st.session_state.scheduled_push_enabled,
