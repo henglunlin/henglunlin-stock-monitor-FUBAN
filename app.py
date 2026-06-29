@@ -190,7 +190,6 @@ class FubonRealtimeManager:
         self.connected = False
         self.error = None
         self.prices = {}
-        self.tick_status = {}
         self.messages = {}
         self.subscribed = set()
         self.last_message_at = None
@@ -272,7 +271,6 @@ class FubonRealtimeManager:
                 self.connected = False
                 self.error = str(e)
                 self.prices = {}
-                self.tick_status = {}
                 self.messages = {}
                 self.subscribed = set()
                 self.last_message_at = None
@@ -305,116 +303,22 @@ class FubonRealtimeManager:
         for p in price_candidates:
             if p is not None and pd.notna(p):
                 try:
-                    price = float(str(p).replace(",", ""))
+                    price = float(p)
                     break
                 except Exception:
                     continue
         return symbol, price
 
-    def _safe_float(self, value):
-        try:
-            if value is None or pd.isna(value):
-                return None
-        except Exception:
-            pass
-        try:
-            return float(str(value).strip().replace(",", ""))
-        except Exception:
-            return None
-
-    def _safe_int(self, value):
-        val = self._safe_float(value)
-        if val is None:
-            return None
-        try:
-            return int(round(val))
-        except Exception:
-            return None
-
-    def _extract_tick_detail(self, msg):
-        """解析富邦 trades 訊息：成交價、單筆量、內外盤。"""
-        data = msg.get("data", {})
-        if not isinstance(data, dict):
-            data = {}
-        symbol, price = self._extract_symbol_price(msg)
-
-        volume_candidates = [
-            data.get("volume"), data.get("tradeVolume"), data.get("trade_volume"),
-            data.get("size"), data.get("quantity"), data.get("qty"), data.get("unit"),
-            msg.get("volume"), msg.get("tradeVolume"), msg.get("size"),
-            msg.get("quantity"), msg.get("qty"), msg.get("unit"),
-        ]
-        tick_volume = None
-        for value in volume_candidates:
-            tick_volume = self._safe_int(value)
-            if tick_volume is not None:
-                break
-
-        trade_type_candidates = [
-            data.get("tradeType"), data.get("tickType"), data.get("type"),
-            data.get("side"), data.get("dealType"),
-            msg.get("tradeType"), msg.get("tickType"), msg.get("type"),
-            msg.get("side"), msg.get("dealType"),
-        ]
-        raw_type = next((str(x).strip() for x in trade_type_candidates if x is not None and str(x).strip()), "")
-        raw_type_upper = raw_type.upper()
-        last_trade_type = None
-        if raw_type_upper in ["BUY", "B", "BID", "外盤", "外盤(買)", "買", "1"]:
-            last_trade_type = "外盤(買)"
-        elif raw_type_upper in ["SELL", "S", "ASK", "內盤", "內盤(賣)", "賣", "2"]:
-            last_trade_type = "內盤(賣)"
-
-        if last_trade_type is None and price is not None:
-            bid = self._safe_float(data.get("bid") or data.get("bidPrice") or data.get("bestBidPrice") or msg.get("bid") or msg.get("bidPrice"))
-            ask = self._safe_float(data.get("ask") or data.get("askPrice") or data.get("bestAskPrice") or msg.get("ask") or msg.get("askPrice"))
-            if ask is not None and price >= ask:
-                last_trade_type = "外盤(買)"
-            elif bid is not None and price <= bid:
-                last_trade_type = "內盤(賣)"
-
-        return symbol, price, tick_volume, last_trade_type
-
-    def _format_large_order_text(self, large_order):
-        if not large_order:
-            return "監控中"
-        lo_time = large_order.get("time")
-        time_text = lo_time.strftime("%H:%M:%S") if hasattr(lo_time, "strftime") else "--:--:--"
-        price = large_order.get("price")
-        price_text = f"@{price:.2f}" if isinstance(price, (int, float)) else ""
-        volume = large_order.get("volume")
-        trade_type = large_order.get("type") or "內外盤不明"
-        icon = "🚀" if trade_type == "外盤(買)" else "📉" if trade_type == "內盤(賣)" else "🔔"
-        return f"{icon} {time_text} {volume}張 {price_text} {trade_type}"
-
     def _on_message(self, message):
         msg = self._parse_message(message)
-        symbol, price, tick_volume, last_trade_type = self._extract_tick_detail(msg)
+        symbol, price = self._extract_symbol_price(msg)
         now = datetime.now(TW_TZ)
         with self.lock:
             self.last_message_at = now
             if symbol:
                 self.messages[symbol] = {"time": now, "raw": msg}
-                status = self.tick_status.get(symbol, {
-                    "last_ws_price": None,
-                    "real_tick_volume": None,
-                    "last_trade_type": "-",
-                    "total_buy_vol": 0,
-                    "total_sell_vol": 0,
-                    "latest_large_order": None,
-                })
-                if price is not None:
-                    self.prices[symbol] = price
-                    status["last_ws_price"] = price
-                if tick_volume is not None:
-                    status["real_tick_volume"] = tick_volume
-                if last_trade_type:
-                    status["last_trade_type"] = last_trade_type
-                    if tick_volume is not None:
-                        if last_trade_type == "外盤(買)":
-                            status["total_buy_vol"] = int(status.get("total_buy_vol", 0) or 0) + tick_volume
-                        elif last_trade_type == "內盤(賣)":
-                            status["total_sell_vol"] = int(status.get("total_sell_vol", 0) or 0) + tick_volume
-                self.tick_status[symbol] = status
+            if symbol and price is not None:
+                self.prices[symbol] = price
 
     def subscribe(self, symbol: str):
         if not self.ws:
@@ -444,32 +348,6 @@ class FubonRealtimeManager:
         code = symbol_to_code(symbol)
         with self.lock:
             return copy.deepcopy(self.messages.get(code))
-
-    def get_order_status(self, symbol: str, large_order_threshold: int = 50):
-        code = symbol_to_code(symbol)
-        threshold = int(large_order_threshold or 50)
-        with self.lock:
-            status = copy.deepcopy(self.tick_status.get(code, {
-                "last_ws_price": self.prices.get(code),
-                "real_tick_volume": None,
-                "last_trade_type": "-",
-                "total_buy_vol": 0,
-                "total_sell_vol": 0,
-                "latest_large_order": None,
-            }))
-
-        tick_volume = status.get("real_tick_volume")
-        if tick_volume is not None and tick_volume >= threshold:
-            latest = status.get("latest_large_order")
-            if latest is None or latest.get("volume") != tick_volume:
-                status["latest_large_order"] = {
-                    "time": datetime.now(TW_TZ),
-                    "price": status.get("last_ws_price"),
-                    "volume": tick_volume,
-                    "type": status.get("last_trade_type", "-"),
-                }
-        status["large_order_text"] = self._format_large_order_text(status.get("latest_large_order"))
-        return status
 
     def get_status(self):
         with self.lock:
@@ -707,7 +585,7 @@ def get_yfinance_fast_info_price(symbol: str):
     raise ValueError(f"yfinance fast_info 無法取得 {symbol} 價格。最後錯誤：{last_error}")
 
 
-@st.cache_data(ttl=1)
+@st.cache_data(ttl=30)
 def get_yahoo_tw_quote_price(symbol: str):
     headers = {
         "User-Agent": "Mozilla/5.0",
@@ -750,7 +628,7 @@ def get_yahoo_tw_quote_price(symbol: str):
     raise ValueError(f"Yahoo TW 無法取得 {symbol} 價格。最後錯誤：{last_error}")
 
 
-@st.cache_data(ttl=1)
+@st.cache_data(ttl=30)
 def get_yfinance_latest_daily_close(symbol: str):
     last_error = ""
     for yf_symbol in build_yfinance_candidates(symbol):
@@ -1557,13 +1435,6 @@ else:
 tw_now = datetime.now(TW_TZ)
 st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
 rise_threshold = st.slider("儀表板漲幅達標門檻 (%)", min_value=5, max_value=9, value=5, step=1)
-large_order_threshold = st.number_input(
-    "大單追蹤門檻 (張) - 會直接顯示在各分類表格中",
-    min_value=1,
-    value=int(st.session_state.get("large_order_threshold", 50)),
-    step=10,
-    key="large_order_threshold",
-)
 
 manager = st.session_state.fubon_manager
 if st.session_state.fubon_logged_in:
@@ -1692,23 +1563,10 @@ for group_name, stocks in st.session_state.stock_groups.items():
             else:
                 flat_count += 1
             valid_stock_stats.append({"symbol": symbol, "code": symbol_to_code(symbol), "name": stock_name, "pct": float(data["pct"])})
-
-            order_status = manager.get_order_status(symbol, large_order_threshold) if manager is not None else {}
-            large_order_text = order_status.get("large_order_text", "監控中")
-            tick_volume_text = "-" if order_status.get("real_tick_volume") is None else f"{order_status.get('real_tick_volume')} 張"
-            last_trade_type_text = order_status.get("last_trade_type", "-")
-            total_buy_text = order_status.get("total_buy_vol", 0)
-            total_sell_text = order_status.get("total_sell_vol", 0)
-
             rows.append({
                 "代碼": symbol,
                 "代碼網址": yahoo_quote_url(symbol),
                 "股票名稱": stock_name,
-                "大單追蹤": large_order_text,
-                "最新單筆": tick_volume_text,
-                "內外盤": last_trade_type_text,
-                "外盤累積": total_buy_text,
-                "內盤累積": total_sell_text,
                 "價格": f"{data['price']:.2f}",
                 "昨收": f"{data['yesterday_close']:.2f}",
                 "漲跌%": data["pct"],
@@ -1726,11 +1584,6 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "代碼": symbol,
                 "代碼網址": "",
                 "股票名稱": get_stock_name(symbol),
-                "大單追蹤": "-",
-                "最新單筆": "-",
-                "內外盤": "-",
-                "外盤累積": "-",
-                "內盤累積": "-",
                 "價格": "錯誤",
                 "昨收": "-",
                 "漲跌%": "-",
@@ -1786,8 +1639,8 @@ for group_name, info in group_tables.items():
     if not table_df.empty and "代碼網址" in table_df.columns:
         table_df["代碼"] = table_df["代碼網址"]
     display_columns = [
-        "代碼", "股票名稱", "大單追蹤", "最新單筆", "內外盤", "外盤累積", "內盤累積",
-        "價格", "昨收", "漲跌%", "MA位置", "MA排列", "K值", "D值", "KD訊號", "跳空訊號", "價格來源",
+        "代碼", "股票名稱", "價格", "昨收", "漲跌%", "MA位置", "MA排列",
+        "K值", "D值", "KD訊號", "跳空訊號", "價格來源",
     ]
     st.dataframe(
         table_df[display_columns],
