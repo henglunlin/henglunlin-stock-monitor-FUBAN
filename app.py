@@ -28,6 +28,8 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
+st.set_page_config(page_title="台股監控面板", layout="wide")
+
 # ===== 富邦 API 引入 =====
 try:
     from fubon_neo.sdk import FubonSDK
