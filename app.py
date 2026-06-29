@@ -1448,8 +1448,14 @@ with ctrl_col2:
         value=st.session_state.auto_refresh_enabled,
         help="開啟後會依照刷新秒數重新整理；WebSocket 即時價會跟著此秒數更新畫面。",
     )
+
     if auto_refresh != st.session_state.auto_refresh_enabled:
-        st.session_state.auto_refresh_enabled = autodiv style='white-space:nowrap; font-size:14px; padding-top:6px;'>刷新秒數</div>",        st.session_state.auto_refresh_enabled = auto_refresh
+        st.session_state.auto_refresh_enabled = auto_refresh
+        st.rerun()
+
+with ctrl_col3_label:
+    st.markdown(
+        "<div style='white-space:nowrap; font-size:14px; padding-top:6px;'>刷新秒數</div>",
         unsafe_allow_html=True,
     )
 
@@ -1470,6 +1476,7 @@ with ctrl_col4:
         value=st.session_state.tg_push_enabled,
         help="必須開啟此選項，機器人才會發送推播",
     )
+
     if tg_push != st.session_state.tg_push_enabled:
         st.session_state.tg_push_enabled = tg_push
         st.rerun()
@@ -1480,13 +1487,10 @@ with ctrl_col5:
         value=st.session_state.scheduled_push_enabled,
         help="開啟後，僅在 09:40, 10:00, 11:00, 12:00, 13:00 執行推播檢查",
     )
+
     if sched_push != st.session_state.scheduled_push_enabled:
         st.session_state.scheduled_push_enabled = sched_push
         st.rerun()
-        st.rerun()
-
-with ctrl_col3_label:
-    st.markdown(
 
 
 gc.collect()
