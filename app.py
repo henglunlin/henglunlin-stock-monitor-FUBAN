@@ -8,6 +8,7 @@
 3. 新增 dashboard-top 錨點，「回到儀表板」可正常跳轉。
 4. 儀表板卡片與分類錨點改成真正 HTML。
 6. 圖片不存在時不會中斷，改顯示文字標題。
+7. 移除 TWO / TW 猜測邏輯，全面改為查表。
 """
 
 import re
@@ -36,9 +37,6 @@ try:
 except Exception:
     FubonSDK = None
 
-# ===== Streamlit UI 基本設定（一定要放最前面）=====
-st.set_page_config(layout="wide")
-
 # ===== 常數設定 =====
 TW_TZ = ZoneInfo("Asia/Taipei")
 REFRESH_SEC = 3
@@ -48,7 +46,7 @@ ENABLE_GAP_SIGNAL = True
 GROUP_EDIT_PIN = "1219"
 GROUPS_FILE = "stock_groups.json"
 BACKUP_DIR = "backups"
-STOCK_NAME_FILE = "TWstocklistname.txt"
+STOCK_NAME_FILE = "TWstocklistname2.txt"
 APP_LOGO = "jerry.jpg"
 
 # ===== Secrets 安全讀取 =====
@@ -103,7 +101,7 @@ html { scroll-behavior: smooth; }
 )
 
 # =============================================================================
-# 基礎工具函式
+# 基礎工具函式（已移除猜測邏輯，全面改為查表）
 # =============================================================================
 def symbol_to_code(symbol: str) -> str:
     return str(symbol).strip().upper().split(".")[0]
@@ -119,16 +117,67 @@ def make_anchor_id(group_name: str) -> str:
     return f"group-{anchor}"
 
 
+@st.cache_data(ttl=86400)
+def load_stock_lookup_maps(file_path: str = STOCK_NAME_FILE) -> dict:
+    code_to_name = {}
+    code_to_symbol = {}
+    name_to_symbol = {}
+    if not os.path.exists(file_path):
+        return {"code_to_name": code_to_name, "code_to_symbol": code_to_symbol, "name_to_symbol": name_to_symbol}
+    with open(file_path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            line = line.replace("\ufeff", "").replace("\u3000", " ").strip()
+            if "\t" in line:
+                parts = [p.strip() for p in line.split("\t") if p.strip()]
+            else:
+                m = re.match(r"^([^\s]+)\s+(.+)$", line)
+                parts = [m.group(1).strip(), m.group(2).strip()] if m else []
+            if len(parts) < 2:
+                continue
+            raw_symbol = parts[0].upper()
+            stock_name = parts[1].strip()
+            
+            # normalize_lookup_symbol 內聯邏輯避免循環
+            symbol = raw_symbol
+            code = symbol_to_code(symbol)
+            if not code or not stock_name:
+                continue
+            code_to_name[code] = stock_name
+            code_to_symbol[code] = symbol
+            name_to_symbol[stock_name] = symbol
+            name_to_symbol[stock_name.replace(" ", "")] = symbol
+    return {"code_to_name": code_to_name, "code_to_symbol": code_to_symbol, "name_to_symbol": name_to_symbol}
+
+
+def normalize_lookup_symbol(raw_symbol: str) -> str:
+    s = str(raw_symbol).strip().upper()
+    if not s:
+        return ""
+    if "." in s:
+        return s
+    return s
+
+
 def normalize_symbol_quick(input_text: str):
     s = str(input_text).strip().upper()
     if not s:
         return None
     if "." in s:
         return s
+    
+    # 移除原本寫死的 3, 6, 8 開頭猜測，改為直接查表對應的完整代碼 (含 .TW / .TWO)[cite: 1, 2]
     if s.isdigit():
-        if s.startswith(("3", "6", "8")):
-            return f"{s}.TWO"
-        return f"{s}.TW"
+        try:
+            lookup = load_stock_lookup_maps(STOCK_NAME_FILE)
+            code_to_symbol = lookup.get("code_to_symbol", {})
+            if s in code_to_symbol:
+                return code_to_symbol[s]
+        except Exception:
+            pass
+            
     return s
 
 
@@ -136,14 +185,15 @@ def build_yfinance_candidates(symbol: str):
     raw = str(symbol).strip().upper()
     code = symbol_to_code(raw)
     candidates = []
+    
     if raw and "." in raw:
         candidates.append(raw)
-    elif raw:
+    else:
         normalized = normalize_symbol_quick(raw)
         if normalized:
             candidates.append(normalized)
-    if code:
-        candidates.extend([f"{code}.TW", f"{code}.TWO"])
+            
+    # 移除直接硬加 .TW 與 .TWO 的舊機制，改由查表提供準確後綴[cite: 1, 2]
     result, seen = [], set()
     for item in candidates:
         if item and item not in seen:
@@ -484,10 +534,6 @@ def check_telegram_push_command():
 # =============================================================================
 @st.cache_data(ttl=YFINANCE_HISTORY_CACHE_TTL_SEC)
 def _download_stock_data_yfinance_history_cached(symbol: str, today_str: str):
-    """今日以前歷史資料全部使用 yfinance；今日以前資料每小時抓一次並快取。
-
-    today_str 放入參數是為了讓 Streamlit cache key 每天切換，避免跨日後仍拿到昨日快取。
-    """
     candidates = build_yfinance_candidates(symbol)
     last_error = ""
     today = pd.to_datetime(today_str).date()
@@ -519,7 +565,6 @@ def _download_stock_data_yfinance_history_cached(symbol: str, today_str: str):
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         df = df.dropna(subset=["Date"])
 
-        # 只保留今日以前資料；今日價格由 WebSocket / 今日價格邏輯處理
         df = df[df["Date"].dt.date < today]
 
         required_cols = ["Open", "High", "Low", "Close", "Volume"]
@@ -541,10 +586,6 @@ def _download_stock_data_yfinance_history_cached(symbol: str, today_str: str):
 
 
 def download_stock_data(symbol):
-    """取得 yfinance 今日以前歷史資料。
-
-    快取策略：今日以前歷史資料每小時更新一次；今日價格不在這裡處理。
-    """
     today_str = datetime.now(TW_TZ).strftime("%Y-%m-%d")
     return _download_stock_data_yfinance_history_cached(symbol, today_str)
 
@@ -811,16 +852,6 @@ def get_stock_name(symbol: str) -> str:
     return code
 
 
-def normalize_lookup_symbol(raw_symbol: str) -> str:
-    s = str(raw_symbol).strip().upper()
-    if not s:
-        return ""
-    if "." in s:
-        return s
-    normalized = normalize_symbol_quick(s)
-    return normalized or s
-
-
 @st.cache_data(ttl=86400)
 def load_stock_lookup_maps(file_path: str = STOCK_NAME_FILE) -> dict:
     code_to_name = {}
@@ -971,7 +1002,6 @@ def compute_indicators(df, price):
     else:
         kd_signal = "-"
 
-
     gap_signal = "-"
     today_low = price_val
     if ENABLE_GAP_SIGNAL and pd.notna(today_low) and pd.notna(yesterday_high) and today_low > yesterday_high:
@@ -1037,7 +1067,6 @@ def build_top3_html(valid_stock_stats):
 
 
 def render_summary_dashboard(group_up_summary, rise_threshold):
-    # 目標錨點：讓「回到儀表板」可以跳到這裡
     st.markdown('<div id="dashboard-top" style="scroll-margin-top: 90px;"></div>', unsafe_allow_html=True)
     st.markdown("### 📌 漲幅儀表板")
     st.caption(f"目前儀表板統計門檻：漲幅 ≥ {rise_threshold}%")
@@ -1300,7 +1329,7 @@ def render_stock_group_editor():
                 else:
                     st.caption(f"標準化代碼：{resolved_symbol}")
             else:
-                st.caption("查無對應股票，請確認 TWstocklistname.txt 或輸入完整 ticker")
+                st.caption(f"查無對應股票，請確認 {STOCK_NAME_FILE} 或輸入完整 ticker")
         with quick_col2:
             if st.button("加入目前分類", key="quick_add_btn", width="stretch"):
                 enter_edit_mode()
@@ -1429,9 +1458,6 @@ else:
         unsafe_allow_html=True,
     )
 
-
-
-# 控制列排版：手動更新｜自動更新 + 刷新秒數｜Telegram｜定時推送
 ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns(
     [1.35, 2.25, 1.45, 1.45],
     gap="medium",
@@ -1511,8 +1537,6 @@ with ctrl_col4:
         st.session_state.scheduled_push_enabled = sched_push
         st.rerun()
 
-
-
 gc.collect()
 
 render_fubon_login()
@@ -1525,7 +1549,6 @@ else:
 tw_now = datetime.now(TW_TZ)
 st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
 
-# 使用 st.columns 將該列切分為兩欄：左邊佔 15% 寬度放輸入框，右邊佔 85% 留白
 col_input, col_space = st.columns([0.15, 0.85])
 
 with col_input:
@@ -1586,7 +1609,6 @@ with st.sidebar.expander("🕒 價格來源模式", expanded=True):
             st.session_state.price_source_override = "auto" if current_mode == "yfinance" else "yfinance"
             st.rerun()
 
-# ===== 推送時間與手動指令邏輯判斷 =====
 can_push_now = False
 current_schedule_key = None
 manual_push_triggered = False
@@ -1615,7 +1637,6 @@ if st.session_state.tg_push_enabled:
                     can_push_now = True
                     break
 
-# ===== 資料計算 =====
 group_tables = {}
 group_up_summary = []
 for group_name, stocks in st.session_state.stock_groups.items():
