@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+import plotly.graph_objects as go
 
 st.set_page_config(page_title="台股監控面板", layout="wide")
 
@@ -411,6 +412,115 @@ class FubonRealtimeManager:
                 "subscribed_count": len(self.subscribed),
                 "last_message_at": self.last_message_at,
             }
+
+# =============================================================================
+# 富邦 REST：TSE 加權指數（TAIEX / IX0001）即時走勢
+# =============================================================================
+TAIEX_SYMBOL = "IX0001"
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def fetch_taiex_intraday(_sdk):
+    """
+    透過富邦 API 的 reststock.intraday.quote / intraday.candles 取得
+    台股加權指數（TSE，代碼 IX0001）當日即時報價與分鐘走勢。
+    _sdk 開頭加底線，st.cache_data 不會嘗試對它做 hash。
+    """
+    reststock = _sdk.marketdata.rest_client.stock
+    quote = reststock.intraday.quote(symbol=TAIEX_SYMBOL)
+    candles = reststock.intraday.candles(symbol=TAIEX_SYMBOL)
+    return {"quote": quote, "candles": candles}
+
+
+def render_taiex_chart():
+    st.markdown("#### 📈 台股加權指數（TSE）即時走勢")
+
+    manager = st.session_state.fubon_manager
+    sdk = getattr(manager, "sdk", None)
+
+    if not st.session_state.fubon_logged_in or sdk is None:
+        st.info("尚未登入富邦帳號，登入後即可顯示加權指數即時走勢（資料來源：富邦 API）。")
+        return
+
+    try:
+        data = fetch_taiex_intraday(sdk)
+    except Exception as e:
+        st.warning(f"加權指數資料取得失敗：{e}")
+        return
+
+    quote = data.get("quote") or {}
+    candles_resp = data.get("candles") or {}
+    rows = candles_resp.get("data") or []
+
+    if not rows:
+        st.info("目前無加權指數分鐘資料（可能尚未開盤或休市）。")
+        return
+
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"])
+    df["time_label"] = df["date"].dt.strftime("%H:%M")
+
+    last_price = quote.get("lastPrice") or quote.get("closePrice") or float(df["close"].iloc[-1])
+    prev_close = quote.get("previousClose") or quote.get("referencePrice")
+    change = quote.get("change")
+    change_pct = quote.get("changePercent")
+
+    if change is None and prev_close is not None:
+        change = last_price - prev_close
+    if change_pct is None and prev_close:
+        change_pct = (change / prev_close * 100) if (change is not None and prev_close) else None
+
+    is_up = (change or 0) >= 0
+    line_color = "#dc2626" if is_up else "#16a34a"  # 台股慣例：紅漲綠跌
+    fill_color = "rgba(220,38,38,0.08)" if is_up else "rgba(22,163,74,0.08)"
+    sign = "+" if (change or 0) >= 0 else ""
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("加權指數", f"{last_price:,.2f}")
+    m2.metric("漲跌", f"{sign}{change:,.2f}" if change is not None else "—")
+    m3.metric("漲跌幅", f"{sign}{change_pct:,.2f}%" if change_pct is not None else "—")
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=df["time_label"],
+            y=df["close"],
+            mode="lines",
+            line=dict(color=line_color, width=2),
+            fill="tozeroy",
+            fillcolor=fill_color,
+            name="加權指數",
+            hovertemplate="%{x}<br>%{y:,.2f}<extra></extra>",
+        )
+    )
+    if prev_close is not None:
+        fig.add_hline(
+            y=prev_close,
+            line_dash="dot",
+            line_color="rgba(255,255,255,0.35)",
+            annotation_text="昨收",
+            annotation_position="top left",
+        )
+
+    fig.update_layout(
+        height=260,
+        margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False, tickfont=dict(size=10)),
+        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.08)", tickfont=dict(size=10)),
+        showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    ts = quote.get("lastUpdated") or quote.get("closeTime")
+    if ts:
+        try:
+            ts_dt = datetime.fromtimestamp(ts / 1_000_000, TW_TZ)
+            st.caption(f"資料時間：{ts_dt.strftime('%H:%M:%S')}（來源：富邦 API）")
+        except Exception:
+            pass
+
 
 # =============================================================================
 # 分組讀寫
@@ -1548,6 +1658,8 @@ else:
 
 tw_now = datetime.now(TW_TZ)
 st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
+
+render_taiex_chart()
 
 col_input, col_space = st.columns([0.15, 0.85])
 
