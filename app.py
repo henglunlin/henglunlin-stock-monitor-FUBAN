@@ -480,6 +480,15 @@ def render_taiex_chart():
     m2.metric("漲跌", f"{sign}{change:,.2f}" if change is not None else "—")
     m3.metric("漲跌幅", f"{sign}{change_pct:,.2f}%" if change_pct is not None else "—")
 
+    # 加權指數本身是四萬多點的絕對值，但當日震盪通常只有幾百點；
+    # 如果用 fill="tozeroy" 會強迫 Y 軸從 0 開始，把整天的漲跌壓成貼齊頂端的一條線。
+    # 這裡改用「以資料範圍為主、留一點邊界」的方式讓曲線的起伏看得出來。
+    y_values = pd.concat([df["close"], pd.Series([prev_close] if prev_close is not None else [])])
+    y_min, y_max = float(y_values.min()), float(y_values.max())
+    y_span = max(y_max - y_min, 1.0)
+    y_pad = y_span * 0.15
+    y_range = [y_min - y_pad, y_max + y_pad]
+
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -508,7 +517,13 @@ def render_taiex_chart():
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         xaxis=dict(showgrid=False, tickfont=dict(size=10)),
-        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.08)", tickfont=dict(size=10)),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor="rgba(255,255,255,0.08)",
+            tickfont=dict(size=10),
+            range=y_range,
+            tickformat=",.0f",
+        ),
         showlegend=False,
     )
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
