@@ -458,7 +458,13 @@ def render_taiex_chart():
 
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"])
-    df["time_label"] = df["date"].dt.strftime("%H:%M")
+
+    # 交易時段固定為 09:00–13:30，X 軸也固定這個範圍、每 30 分鐘一格，
+    # 不會因為資料只到某個時間點就把整條線拉長或壓縮版面。
+    session_date = df["date"].iloc[0].date()
+    session_tz = df["date"].dt.tz
+    session_start = pd.Timestamp.combine(session_date, pd.Timestamp("09:00").time()).tz_localize(session_tz)
+    session_end = pd.Timestamp.combine(session_date, pd.Timestamp("13:30").time()).tz_localize(session_tz)
 
     last_price = quote.get("lastPrice") or quote.get("closePrice") or float(df["close"].iloc[-1])
     prev_close = quote.get("previousClose") or quote.get("referencePrice")
@@ -492,14 +498,14 @@ def render_taiex_chart():
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
-            x=df["time_label"],
+            x=df["date"],
             y=df["close"],
             mode="lines",
             line=dict(color=line_color, width=2),
             fill="tozeroy",
             fillcolor=fill_color,
             name="加權指數",
-            hovertemplate="%{x}<br>%{y:,.2f}<extra></extra>",
+            hovertemplate="%{x|%H:%M}<br>%{y:,.2f}<extra></extra>",
         )
     )
     if prev_close is not None:
@@ -516,7 +522,15 @@ def render_taiex_chart():
         margin=dict(l=10, r=10, t=10, b=10),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        xaxis=dict(showgrid=False, tickfont=dict(size=10)),
+        xaxis=dict(
+            type="date",
+            range=[session_start, session_end],
+            dtick=30 * 60 * 1000,  # 每 30 分鐘一格
+            tickformat="%H:%M",
+            showgrid=True,
+            gridcolor="rgba(255,255,255,0.08)",
+            tickfont=dict(size=10),
+        ),
         yaxis=dict(
             showgrid=True,
             gridcolor="rgba(255,255,255,0.08)",
@@ -1676,16 +1690,13 @@ st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
 
 render_taiex_chart()
 
-col_input, col_space = st.columns([0.15, 0.85])
-
-with col_input:
-    rise_threshold = st.number_input(
-        "漲幅門檻 (%)", 
-        min_value=0.00, 
-        value=5.00, 
-        step=1.00, 
-        format="%.2f"
-    )
+rise_threshold = st.sidebar.number_input(
+    "漲幅門檻 (%)",
+    min_value=0.00,
+    value=5.00,
+    step=1.00,
+    format="%.2f",
+)
 
 manager = st.session_state.fubon_manager
 if st.session_state.fubon_logged_in:
