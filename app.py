@@ -111,9 +111,8 @@ def symbol_to_code(symbol: str) -> str:
 def yahoo_quote_url(symbol: str) -> str:
     raw_code = symbol_to_code(symbol)
     code = raw_code.split('/')[0]
-    url = f"https://tw.stock.yahoo.com/quote/{code}/technical-analysis"
-    # 直接回傳 HTML <a> 標籤,而不是 Markdown 語法
-    return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{code}</a>'
+    # 回傳「純網址」字串,交給 st.column_config.LinkColumn 處理顯示文字與跳轉
+    return f"https://tw.stock.yahoo.com/quote/{code}/technical-analysis"
 
 
 def make_anchor_id(group_name: str) -> str:
@@ -1909,7 +1908,11 @@ for group_name, info in group_tables.items():
         table_df[display_columns],
         width="stretch",
         column_config={
-            "代碼": st.column_config.LinkColumn("代碼", help="點擊前往台股 Yahoo", display_text=r"https://tw.stock.yahoo.com/quote/(.*)"),
+            "代碼": st.column_config.LinkColumn(
+                "代碼",
+                help="點擊前往台股 Yahoo 技術分析頁",
+                display_text=r"quote/([^/]+)/technical-analysis",
+            ),
             "股票名稱": st.column_config.TextColumn("股票名稱"),
         },
     )
