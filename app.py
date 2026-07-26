@@ -110,7 +110,7 @@ def symbol_to_code(symbol: str) -> str:
 
 def yahoo_quote_url(symbol: str) -> str:
     code = symbol_to_code(symbol)
-    return f"https://tw.stock.yahoo.com/quote/{code}"
+    return f"https://tw.stock.yahoo.com/quote/{code}/technical-analysis"
 
 
 def make_anchor_id(group_name: str) -> str:
