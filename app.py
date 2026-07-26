@@ -111,9 +111,9 @@ def symbol_to_code(symbol: str) -> str:
 def yahoo_quote_url(symbol: str) -> str:
     raw_code = symbol_to_code(symbol)
     code = raw_code.split('/')[0]
-    
-    # 改為回傳 Markdown 超連結格式：[代碼](完整網址)
-    return f"[{code}](https://tw.stock.yahoo.com/quote/{code}/technical-analysis)"
+    url = f"https://tw.stock.yahoo.com/quote/{code}/technical-analysis"
+    # 直接回傳 HTML <a> 標籤,而不是 Markdown 語法
+    return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{code}</a>'
 
 
 def make_anchor_id(group_name: str) -> str:
