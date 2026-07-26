@@ -2,7 +2,6 @@
 headless = true
 port = 8501
 enableCORS = false
-Config · TOML
 [theme]
 base = "dark"
 primaryColor = "#00C48C"
