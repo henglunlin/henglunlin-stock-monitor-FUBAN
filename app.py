@@ -109,7 +109,8 @@ def symbol_to_code(symbol: str) -> str:
 
 
 def yahoo_quote_url(symbol: str) -> str:
-    code = symbol_to_code(symbol)
+    raw_code = symbol_to_code(symbol)
+    code = raw_code.split('/')[0]
     return f"https://tw.stock.yahoo.com/quote/{code}/technical-analysis"
 
 
