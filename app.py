@@ -17,6 +17,7 @@ import json
 import copy
 import time
 import gc
+import math
 import base64
 import tempfile
 import threading
@@ -1060,9 +1061,80 @@ def resolve_stock_query(input_text: str):
     return None, None, None
 
 # =============================================================================
+# 台股升降單位 / 精確漲跌停價計算
+# =============================================================================
+def get_tw_tick_size(price: float) -> float:
+    """
+    台股股價升降單位（六個級距，現行制度）：
+    <10 元：0.01；10~50 元：0.05；50~100 元：0.1；
+    100~500 元：0.5；500~1000 元：1；1000 元以上：5。
+    """
+    if price < 10:
+        return 0.01
+    if price < 50:
+        return 0.05
+    if price < 100:
+        return 0.1
+    if price < 500:
+        return 0.5
+    if price < 1000:
+        return 1.0
+    return 5.0
+
+
+def compute_tw_limit_prices(yesterday_close: float):
+    """
+    依台股實務規則計算精確的漲停價／跌停價（而非用百分比粗估）：
+    1. 理論價 = 昨收 × 110%（漲停）／× 90%（跌停）。
+    2. 依理論價所在的升降單位級距，對齊到最接近的檔位：
+       漲停價一律「無條件捨去」到升降單位（絕不可超過 10% 上限），
+       跌停價一律「無條件進位」到升降單位（絕不可跌破 10% 下限）。
+    回傳 (limit_up_price, limit_down_price)，皆四捨五入到小數點後 2 位以避免浮點誤差。
+    """
+    if pd.isna(yesterday_close) or yesterday_close <= 0:
+        return None, None
+
+    raw_up = yesterday_close * 1.1
+    raw_down = yesterday_close * 0.9
+
+    tick_up = get_tw_tick_size(raw_up)
+    tick_down = get_tw_tick_size(raw_down)
+
+    limit_up = math.floor(round(raw_up / tick_up, 6)) * tick_up
+    limit_down = math.ceil(round(raw_down / tick_down, 6)) * tick_down
+
+    return round(limit_up, 2), round(limit_down, 2)
+
+
+# =============================================================================
+# 盤中最低價追蹤（供跳空訊號使用）
+# =============================================================================
+def update_intraday_low(symbol: str, price_val: float, now_dt) -> float:
+    """
+    追蹤每檔股票「今天」實際看過的最低成交價。
+
+    富邦 WebSocket 逐筆成交訊息只有單一成交價，沒有當日最低價欄位；如果每次
+    刷新都只拿「這一筆」價格去判斷是否跳空，價格只要稍微上下跳動，跳空訊號
+    就會一直忽有忽無。這裡用 st.session_state 把每檔股票「今天」看過的最低價
+    記錄下來，換日時自動重置，讓跳空判斷有穩定、連續的依據。
+    """
+    if "intraday_low_tracker" not in st.session_state:
+        st.session_state.intraday_low_tracker = {}
+    tracker = st.session_state.intraday_low_tracker
+    today_str = now_dt.strftime("%Y-%m-%d")
+    record = tracker.get(symbol)
+    if record is None or record.get("date") != today_str or pd.isna(price_val):
+        tracker[symbol] = {"date": today_str, "low": price_val}
+        return price_val
+    if pd.notna(price_val) and price_val < record["low"]:
+        record["low"] = price_val
+    return record["low"]
+
+
+# =============================================================================
 # 指標計算
 # =============================================================================
-def compute_indicators(df, price):
+def compute_indicators(df, price, session_low=None):
     if df is None or df.empty:
         raise ValueError("下載資料為空")
     if len(df) < 20:
@@ -1143,10 +1215,36 @@ def compute_indicators(df, price):
     else:
         kd_signal = "-"
 
+    # ===== 跳空訊號判斷（修正版）=====
+    # 舊版問題：直接把「當下這一筆成交價」當成「今日最低價」來跟昨天最高價比較。
+    # 富邦 WebSocket 逐筆成交只會回傳單一成交價，並不包含當日真正的最低價欄位，
+    # 所以每次刷新都用最新的一筆價格去判斷，會隨盤中價格上下跳動而忽有忽無，
+    # 而且完全沒有「今天真的有沒有跳空」的記憶。
+    # 修正邏輯：
+    #   1. session_low：由外部持續追蹤「今天到目前為止」看到的最低成交價（見
+    #      update_intraday_low()），取代單一 tick 當作今日最低價，可避免瞬間雜訊。
+    #   2. 只有在 session_low 仍然高於昨天最高價，且「目前價格」還沒有跌回平盤
+    #      （<= 昨收）時，才視為跳空成立；一旦價格跌回昨收（平盤）以下，
+    #      視為跳空已回補，訊號自動取消。
+    if session_low is None or pd.isna(session_low):
+        session_low = price_val
+    today_low = float(min(session_low, price_val))
+
     gap_signal = "-"
-    today_low = price_val
-    if ENABLE_GAP_SIGNAL and pd.notna(today_low) and pd.notna(yesterday_high) and today_low > yesterday_high:
+    if (
+        ENABLE_GAP_SIGNAL
+        and pd.notna(today_low)
+        and pd.notna(yesterday_high)
+        and today_low > yesterday_high
+        and price_val > yesterday_close
+    ):
         gap_signal = "跳空"
+
+    # ===== 精確漲跌停判斷（依實際漲停/跌停價位，而非漲跌%門檻粗估）=====
+    limit_up_price, limit_down_price = compute_tw_limit_prices(yesterday_close)
+    price_epsilon = 0.001  # 容忍浮點誤差，避免因極小的計算誤差漏判
+    is_limit_up = bool(limit_up_price is not None and price_val >= limit_up_price - price_epsilon)
+    is_limit_down = bool(limit_down_price is not None and price_val <= limit_down_price + price_epsilon)
 
     return {
         "price": round(price_val, 2),
@@ -1158,6 +1256,10 @@ def compute_indicators(df, price):
         "d": round(d_t, 1),
         "kd_signal": kd_signal,
         "gap_signal": gap_signal,
+        "limit_up_price": limit_up_price,
+        "limit_down_price": limit_down_price,
+        "is_limit_up": is_limit_up,
+        "is_limit_down": is_limit_down,
     }
 
 # =============================================================================
@@ -1283,6 +1385,8 @@ if "quick_add_symbol_input" not in st.session_state:
     st.session_state.quick_add_symbol_input = ""
 if "notified_stocks" not in st.session_state:
     st.session_state.notified_stocks = set()
+if "intraday_low_tracker" not in st.session_state:
+    st.session_state.intraday_low_tracker = {}
 if "tg_last_update_id" not in st.session_state:
     st.session_state.tg_last_update_id = None
 if "_next_selected_group" in st.session_state:
@@ -1792,7 +1896,8 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 raise ValueError("無法解析 yfinance 欄位格式")
             price, price_source = get_last_price(symbol, df, manager)
             stock_name = get_stock_name(symbol)
-            data = compute_indicators(df, price)
+            session_low = update_intraday_low(symbol, price, tw_now)
+            data = compute_indicators(df, price, session_low)
 
             is_high_gain = data["pct"] >= 5
             has_kd_signal = data["kd_signal"] in ["黃金交叉", "即將黃金交叉"]
@@ -1839,6 +1944,8 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "KD訊號": data["kd_signal"],
                 "跳空訊號": data["gap_signal"],
                 "價格來源": price_source,
+                "_is_limit_up": data["is_limit_up"],
+                "_is_limit_down": data["is_limit_down"],
             })
         except Exception as e:
             error_count += 1
@@ -1856,6 +1963,8 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "KD訊號": "-",
                 "跳空訊號": str(e),
                 "價格來源": "-",
+                "_is_limit_up": False,
+                "_is_limit_down": False,
             })
 
     hit_names_text = compact_name_list(hit_names, max_show=4)
@@ -1904,18 +2013,51 @@ for group_name, info in group_tables.items():
         "代碼", "股票名稱", "價格", "昨收", "漲跌%", "MA位置", "MA排列",
         "K值", "D值", "KD訊號", "跳空訊號", "價格來源",
     ]
-    st.dataframe(
-        table_df[display_columns],
-        width="stretch",
-        column_config={
-            "代碼": st.column_config.LinkColumn(
-                "代碼",
-                help="點擊前往台股 Yahoo 技術分析頁",
-                display_text=r"quote/([^/]+)/technical-analysis",
-            ),
-            "股票名稱": st.column_config.TextColumn("股票名稱"),
-        },
-    )
+
+    if table_df.empty:
+        st.dataframe(
+            table_df[display_columns],
+            width="stretch",
+            column_config={
+                "代碼": st.column_config.LinkColumn(
+                    "代碼",
+                    help="點擊前往台股 Yahoo 技術分析頁",
+                    display_text=r"quote/([^/]+)/technical-analysis",
+                ),
+                "股票名稱": st.column_config.TextColumn("股票名稱"),
+            },
+        )
+    else:
+        # 「股票名稱」欄位底色標示漲停 / 跌停：
+        # 紅底＝漲停（現價 >= 精確漲停價），綠底＝跌停（現價 <= 精確跌停價），
+        # 漲停/跌停價依台股升降單位規則精確計算（見 compute_tw_limit_prices），
+        # 而非用漲跌%門檻粗估，符合台股慣例（紅漲綠跌）。
+        limit_up_series = table_df["_is_limit_up"]
+        limit_down_series = table_df["_is_limit_down"]
+        display_df_view = table_df[display_columns]
+
+        def _highlight_stock_name(row):
+            style = ""
+            if bool(limit_up_series.get(row.name)):
+                style = "background-color: #ff4d4d; color: #ffffff; font-weight: 700;"
+            elif bool(limit_down_series.get(row.name)):
+                style = "background-color: #2ecc71; color: #ffffff; font-weight: 700;"
+            return [style if col == "股票名稱" else "" for col in display_df_view.columns]
+
+        styled_df = display_df_view.style.apply(_highlight_stock_name, axis=1)
+
+        st.dataframe(
+            styled_df,
+            width="stretch",
+            column_config={
+                "代碼": st.column_config.LinkColumn(
+                    "代碼",
+                    help="點擊前往台股 Yahoo 技術分析頁",
+                    display_text=r"quote/([^/]+)/technical-analysis",
+                ),
+                "股票名稱": st.column_config.TextColumn("股票名稱"),
+            },
+        )
     st.markdown('<div style="margin-bottom: 10px;"></div>', unsafe_allow_html=True)
 
 with st.sidebar.expander("🔍 WebSocket Debug", expanded=False):
