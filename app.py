@@ -1288,8 +1288,6 @@ def compute_indicators(df, price, session_low=None):
         "d": round(d_t, 1),
         "kd_signal": kd_signal,
         "gap_signal": gap_signal,
-        "yesterday_high": round(yesterday_high, 2),
-        "today_low_tracked": round(today_low, 2),
     }
 
 # =============================================================================
@@ -1932,10 +1930,8 @@ for group_name, stocks in st.session_state.stock_groups.items():
             official_low = get_official_today_low(manager, symbol)
             if official_low is not None:
                 session_low = official_low
-                low_source = "官方 REST"
             else:
                 session_low = update_intraday_low(symbol, price, tw_now, price_source)
-                low_source = "自行追蹤"
             data = compute_indicators(df, price, session_low)
 
             is_high_gain = data["pct"] >= 5
@@ -1984,9 +1980,6 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "跳空訊號": data["gap_signal"],
                 "價格來源": price_source,
                 "_pct_raw": float(data["pct"]),
-                "_debug_yesterday_high": data["yesterday_high"],
-                "_debug_today_low_tracked": data["today_low_tracked"],
-                "_debug_low_source": low_source,
             })
         except Exception as e:
             error_count += 1
@@ -2005,9 +1998,6 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "跳空訊號": str(e),
                 "價格來源": "-",
                 "_pct_raw": None,
-                "_debug_yesterday_high": None,
-                "_debug_today_low_tracked": None,
-                "_debug_low_source": "-",
             })
 
     hit_names_text = compact_name_list(hit_names, max_show=4)
@@ -2102,28 +2092,6 @@ for group_name, info in group_tables.items():
         )
     st.markdown('<div style="margin-bottom: 10px;"></div>', unsafe_allow_html=True)
 
-    if not table_df.empty:
-        with st.expander(f"🔍 跳空除錯（{group_name}）— 查看內部追蹤數值", expanded=False):
-            debug_cols = ["代碼", "股票名稱", "價格", "昨收", "跳空訊號", "價格來源"]
-            debug_df = table_df[debug_cols].copy()
-            debug_df["昨天最高價"] = table_df["_debug_yesterday_high"]
-            debug_df["今日最低價"] = table_df["_debug_today_low_tracked"]
-            debug_df["最低價來源"] = table_df["_debug_low_source"]
-            debug_df["今日最低價 > 昨天最高價？"] = table_df.apply(
-                lambda r: (
-                    "-" if pd.isna(r["_debug_today_low_tracked"]) or pd.isna(r["_debug_yesterday_high"])
-                    else ("是" if r["_debug_today_low_tracked"] > r["_debug_yesterday_high"] else "否")
-                ),
-                axis=1,
-            )
-            st.caption(
-                "「今日最低價」優先使用富邦官方 REST API（intraday.quote 的 lowPrice，交易所自己算好的，"
-                "100% 準確），「最低價來源」欄會顯示是「官方 REST」還是退回「自行追蹤」。"
-                "只有在 REST 取得失敗（未登入、非交易時段、觸發流量限制）時才會退回自己用 WS "
-                "逐筆成交追蹤的 session_low，這時才可能出現追蹤值被 fallback 價格污染、"
-                "或早期漏接某筆低點之後全天不會恢復的情況。"
-            )
-            st.dataframe(debug_df, width="stretch", hide_index=True)
 
 with st.sidebar.expander("🔍 WebSocket Debug", expanded=False):
     debug_code = st.text_input("輸入代碼看最後 WS 原始訊息", value="4919")
