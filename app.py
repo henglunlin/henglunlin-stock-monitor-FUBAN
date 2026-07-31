@@ -3,13 +3,12 @@
 股票監控面板 - 富邦 WebSocket 即時價 + yfinance 歷史資料
 
 本版修正 / 改進：
-1. 修正 HTML 被寫成 < / > 導致錨點與按鈕無法跳轉的問題。
+1. 修正 HTML 被寫成 &lt; / &gt; 導致錨點與按鈕無法跳轉的問題。
 2. 修正 APP_LOGO 字串少了結尾引號的語法錯誤。
 3. 新增 dashboard-top 錨點，「回到儀表板」可正常跳轉。
 4. 儀表板卡片與分類錨點改成真正 HTML。
 6. 圖片不存在時不會中斷，改顯示文字標題。
 7. 移除 TWO / TW 猜測邏輯，全面改為查表。
-8. 將資料來源預設改為 DB 歷史資料 + 盤中富邦/盤後yfinance (對齊綠色標示預設邏輯)
 """
 
 import re
@@ -177,7 +176,7 @@ def normalize_symbol_quick(input_text: str):
     if "." in s:
         return s
     
-    # 移除原本寫死的 3, 6, 8 開頭猜測，改為直接查表對應的完整代碼 (含 .TW / .TWO)
+    # 移除原本寫死的 3, 6, 8 開頭猜測，改為直接查表對應的完整代碼 (含 .TW / .TWO)[cite: 1, 2]
     if s.isdigit():
         try:
             lookup = load_stock_lookup_maps(STOCK_NAME_FILE)
@@ -202,7 +201,7 @@ def build_yfinance_candidates(symbol: str):
         if normalized:
             candidates.append(normalized)
             
-    # 移除直接硬加 .TW 與 .TWO 的舊機制，改由查表提供準確後綴
+    # 移除直接硬加 .TW 與 .TWO 的舊機制，改由查表提供準確後綴[cite: 1, 2]
     result, seen = [], set()
     for item in candidates:
         if item and item not in seen:
@@ -864,8 +863,7 @@ def get_db_latest_price(symbol: str):
 
 def get_history_data_source_mode() -> str:
     """回傳目前歷史資料來源模式：yfinance / db_history（歷史用DB，當日仍走原邏輯）/ db_all（全部用DB）。"""
-    # 【修正】：將預設的回傳從 yfinance 改為 db_history 以對齊綠色標示
-    return st.session_state.get("history_data_source", "db_history")
+    return st.session_state.get("history_data_source", "yfinance")
 
 
 def download_stock_data(symbol):
@@ -1496,11 +1494,8 @@ if "fubon_logged_in" not in st.session_state:
     st.session_state.fubon_logged_in = False
 if "price_source_override" not in st.session_state:
     st.session_state.price_source_override = "auto"
-
-# 【修正】：將資料來源預設值從 "yfinance" 變更為 "db_history" (對應您標註綠色為預設的設定)
 if "history_data_source" not in st.session_state:
-    st.session_state.history_data_source = "db_history"
-
+    st.session_state.history_data_source = "yfinance"
 if "selected_group_editor" not in st.session_state:
     group_names_init = list(st.session_state.stock_groups.keys())
     st.session_state.selected_group_editor = group_names_init[0] if group_names_init else ""
@@ -1913,15 +1908,14 @@ with ctrl_col4:
 gc.collect()
 
 with st.sidebar.expander("🗄️ 資料來源設定", expanded=True):
-    # 【修正】：更新 UI 選項文字，明確表達您圖片中定義的資料來源與切換邏輯。
     HISTORY_SOURCE_OPTIONS = {
-        "db_history": "及時與歷史資料（預設）：歷史 twse_ohlcv.db ＋ 當日 13:30前富邦 / 13:30後yfinance",
-        "db_all": "盤後資料（當日+歷史）：全部使用 twse_ohlcv.db",
-        "yfinance": "備用模式：全部使用 yfinance",
+        "yfinance": "yfinance（原始邏輯，預設）",
+        "db_history": "twse_ohlcv.db（歷史）＋ 富邦/yfinance（當日，13:30 切換不變）",
+        "db_all": "twse_ohlcv.db（全部資料，含當日）",
     }
     _hist_keys = list(HISTORY_SOURCE_OPTIONS.keys())
     _hist_labels = list(HISTORY_SOURCE_OPTIONS.values())
-    _current_hist_mode = st.session_state.get("history_data_source", "db_history")
+    _current_hist_mode = st.session_state.get("history_data_source", "yfinance")
     _selected_label = st.radio(
         "歷史資料來源",
         options=_hist_labels,
@@ -2240,4 +2234,3 @@ if st.session_state.auto_refresh_enabled and not st.session_state.group_editor_u
     refresh_sec = max(1, int(st.session_state.get("refresh_sec", REFRESH_SEC)))
     time.sleep(refresh_sec)
     st.rerun()
-        
