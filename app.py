@@ -1233,6 +1233,8 @@ def compute_indicators(df, price, session_low=None):
         "d": round(d_t, 1),
         "kd_signal": kd_signal,
         "gap_signal": gap_signal,
+        "yesterday_high": round(yesterday_high, 2),
+        "today_low_tracked": round(today_low, 2),
     }
 
 # =============================================================================
@@ -1918,6 +1920,8 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "跳空訊號": data["gap_signal"],
                 "價格來源": price_source,
                 "_pct_raw": float(data["pct"]),
+                "_debug_yesterday_high": data["yesterday_high"],
+                "_debug_today_low_tracked": data["today_low_tracked"],
             })
         except Exception as e:
             error_count += 1
@@ -1936,6 +1940,8 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "跳空訊號": str(e),
                 "價格來源": "-",
                 "_pct_raw": None,
+                "_debug_yesterday_high": None,
+                "_debug_today_low_tracked": None,
             })
 
     hit_names_text = compact_name_list(hit_names, max_show=4)
@@ -2029,6 +2035,28 @@ for group_name, info in group_tables.items():
             },
         )
     st.markdown('<div style="margin-bottom: 10px;"></div>', unsafe_allow_html=True)
+
+    if not table_df.empty:
+        with st.expander(f"🔍 跳空除錯（{group_name}）— 查看內部追蹤數值", expanded=False):
+            debug_cols = ["代碼", "股票名稱", "價格", "昨收", "跳空訊號", "價格來源"]
+            debug_df = table_df[debug_cols].copy()
+            debug_df["昨天最高價"] = table_df["_debug_yesterday_high"]
+            debug_df["今日追蹤最低價"] = table_df["_debug_today_low_tracked"]
+            debug_df["今日追蹤最低價 > 昨天最高價？"] = table_df.apply(
+                lambda r: (
+                    "-" if pd.isna(r["_debug_today_low_tracked"]) or pd.isna(r["_debug_yesterday_high"])
+                    else ("是" if r["_debug_today_low_tracked"] > r["_debug_yesterday_high"] else "否")
+                ),
+                axis=1,
+            )
+            st.caption(
+                "「今日追蹤最低價」是目前 session 累積到的最小可信成交價（見 update_intraday_low）。"
+                "若這個值明顯等於或接近「昨收」，代表追蹤值曾被 fallback 價格（yfinance/history）"
+                "污染過，或曾經真的跌破昨天最高價、之後全天不會再恢復——除非 app 重新啟動"
+                "（換日或重啟會重置追蹤值）。若「價格來源」不是「Fubon WebSocket trades」，"
+                "代表目前這一筆是 fallback 價，不會被拿去更新追蹤值。"
+            )
+            st.dataframe(debug_df, width="stretch", hide_index=True)
 
 with st.sidebar.expander("🔍 WebSocket Debug", expanded=False):
     debug_code = st.text_input("輸入代碼看最後 WS 原始訊息", value="4919")
