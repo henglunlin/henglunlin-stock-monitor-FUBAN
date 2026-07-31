@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-股票監控面板 - 富邦 WebSocket 即時價 + yfinance 歷史資料
+股票監控面板 - 富邦 WebSocket 即時價 + yfinance 歷史資料 + 本地資料庫
 
 本版修正 / 改進：
-1. 修正 HTML 被寫成 &lt; / &gt; 導致錨點與按鈕無法跳轉的問題。
-2. 修正 APP_LOGO 字串少了結尾引號的語法錯誤。
+1. 整合批次讀取本地資料庫 (twse_ohlcv.db) 的功能。
+2. 修正 HTML 被寫成 &lt; / &gt; 導致錨點與按鈕無法跳轉的問題。
 3. 新增 dashboard-top 錨點，「回到儀表板」可正常跳轉。
 4. 儀表板卡片與分類錨點改成真正 HTML。
 6. 圖片不存在時不會中斷，改顯示文字標題。
@@ -21,6 +21,7 @@ import base64
 import tempfile
 import threading
 import requests
+import sqlite3
 from html import escape
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -50,6 +51,7 @@ GROUPS_FILE = "stock_groups.json"
 BACKUP_DIR = "backups"
 STOCK_NAME_FILE = "TWstocklistname2.txt"
 APP_LOGO = "jerry.jpg"
+DB_NAME = "twse_ohlcv.db"
 
 # ===== Secrets 安全讀取 =====
 def get_secret_or_default(key: str, default: str = ""):
@@ -57,7 +59,6 @@ def get_secret_or_default(key: str, default: str = ""):
         return st.secrets.get(key, default)
     except Exception:
         return default
-
 
 # ===== Telegram 設定 =====
 TELEGRAM_BOT_TOKEN = get_secret_or_default("TELEGRAM_BOT_TOKEN", "")
@@ -103,23 +104,19 @@ html { scroll-behavior: smooth; }
 )
 
 # =============================================================================
-# 基礎工具函式（已移除猜測邏輯，全面改為查表）
+# 基礎工具函式
 # =============================================================================
 def symbol_to_code(symbol: str) -> str:
     return str(symbol).strip().upper().split(".")[0]
 
-
 def yahoo_quote_url(symbol: str) -> str:
     raw_code = symbol_to_code(symbol)
     code = raw_code.split('/')[0]
-    # 回傳「純網址」字串,交給 st.column_config.LinkColumn 處理顯示文字與跳轉
     return f"https://tw.stock.yahoo.com/quote/{code}/technical-analysis"
-
 
 def make_anchor_id(group_name: str) -> str:
     anchor = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", group_name).strip("-")
     return f"group-{anchor}"
-
 
 @st.cache_data(ttl=86400)
 def load_stock_lookup_maps(file_path: str = STOCK_NAME_FILE) -> dict:
@@ -144,7 +141,6 @@ def load_stock_lookup_maps(file_path: str = STOCK_NAME_FILE) -> dict:
             raw_symbol = parts[0].upper()
             stock_name = parts[1].strip()
             
-            # normalize_lookup_symbol 內聯邏輯避免循環
             symbol = raw_symbol
             code = symbol_to_code(symbol)
             if not code or not stock_name:
@@ -155,7 +151,6 @@ def load_stock_lookup_maps(file_path: str = STOCK_NAME_FILE) -> dict:
             name_to_symbol[stock_name.replace(" ", "")] = symbol
     return {"code_to_name": code_to_name, "code_to_symbol": code_to_symbol, "name_to_symbol": name_to_symbol}
 
-
 def normalize_lookup_symbol(raw_symbol: str) -> str:
     s = str(raw_symbol).strip().upper()
     if not s:
@@ -164,7 +159,6 @@ def normalize_lookup_symbol(raw_symbol: str) -> str:
         return s
     return s
 
-
 def normalize_symbol_quick(input_text: str):
     s = str(input_text).strip().upper()
     if not s:
@@ -172,7 +166,6 @@ def normalize_symbol_quick(input_text: str):
     if "." in s:
         return s
     
-    # 移除原本寫死的 3, 6, 8 開頭猜測，改為直接查表對應的完整代碼 (含 .TW / .TWO)[cite: 1, 2]
     if s.isdigit():
         try:
             lookup = load_stock_lookup_maps(STOCK_NAME_FILE)
@@ -184,10 +177,8 @@ def normalize_symbol_quick(input_text: str):
             
     return s
 
-
 def build_yfinance_candidates(symbol: str):
     raw = str(symbol).strip().upper()
-    code = symbol_to_code(raw)
     candidates = []
     
     if raw and "." in raw:
@@ -197,14 +188,12 @@ def build_yfinance_candidates(symbol: str):
         if normalized:
             candidates.append(normalized)
             
-    # 移除直接硬加 .TW 與 .TWO 的舊機制，改由查表提供準確後綴[cite: 1, 2]
     result, seen = [], set()
     for item in candidates:
         if item and item not in seen:
             seen.add(item)
             result.append(item)
     return result
-
 
 def normalize_symbols_from_text(text: str):
     if not text:
@@ -226,7 +215,6 @@ def normalize_symbols_from_text(text: str):
             result.append(normalized)
     return result
 
-
 def compact_name_list(names, max_show=3):
     names = [str(x).strip() for x in names if str(x).strip()]
     if not names:
@@ -236,7 +224,7 @@ def compact_name_list(names, max_show=3):
     return "、".join(names[:max_show]) + f" 等{len(names)}檔"
 
 # =============================================================================
-# 富邦 WebSocket：只負責「當日即時股價」
+# 富邦 WebSocket
 # =============================================================================
 class FubonRealtimeManager:
     def __init__(self):
@@ -255,13 +243,11 @@ class FubonRealtimeManager:
     def login(self, fubon_id: str, fubon_password: str, cert_password: str, pfx_base64: str):
         if FubonSDK is None:
             raise RuntimeError("富邦 SDK 尚未安裝或載入失敗")
-
         try:
             if self.ws is not None:
                 self.ws.disconnect()
         except Exception:
             pass
-
         with self.lock:
             self.sdk = None
             self.ws = None
@@ -276,21 +262,17 @@ class FubonRealtimeManager:
         pfx_base64 = str(pfx_base64).strip()
         if "," in pfx_base64 and "base64" in pfx_base64[:80].lower():
             pfx_base64 = pfx_base64.split(",", 1)[1].strip()
-
         try:
             cert_bytes = base64.b64decode(pfx_base64, validate=True)
         except Exception as e:
             raise RuntimeError(f"pfx_base64 不是有效的 Base64 憑證資料：{e}")
         if not cert_bytes:
             raise RuntimeError("pfx_base64 解碼後是空資料")
-
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pfx")
         tmp.write(cert_bytes)
         tmp.close()
         self.cert_path = tmp.name
 
-        sdk = None
-        ws = None
         try:
             sdk = FubonSDK()
             login_result = sdk.login(
@@ -308,7 +290,6 @@ class FubonRealtimeManager:
             ws = sdk.marketdata.websocket_client.stock
             ws.on("message", self._on_message)
             ws.connect()
-
             with self.lock:
                 self.sdk = sdk
                 self.ws = ws
@@ -417,47 +398,21 @@ class FubonRealtimeManager:
             }
 
 # =============================================================================
-# 富邦 REST：TSE 加權指數（TAIEX / IX0001）即時走勢
+# 富邦 REST
 # =============================================================================
 TAIEX_SYMBOL = "IX0001"
 
-
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_taiex_intraday(_sdk):
-    """
-    透過富邦 API 的 reststock.intraday.quote / intraday.candles 取得
-    台股加權指數（TSE，代碼 IX0001）當日即時報價與分鐘走勢。
-    _sdk 開頭加底線，st.cache_data 不會嘗試對它做 hash。
-    """
     reststock = _sdk.marketdata.rest_client.stock
     quote = reststock.intraday.quote(symbol=TAIEX_SYMBOL)
     candles = reststock.intraday.candles(symbol=TAIEX_SYMBOL)
     return {"quote": quote, "candles": candles}
 
-
-# =============================================================================
-# 富邦 REST：個股「今天」官方 OHLC（取代自己土法煉鋼追蹤的 session_low）
-# =============================================================================
-# 富邦官方 REST API 的 intraday.quote() 會直接回傳「今天」交易所算好的
-# openPrice / highPrice / lowPrice / lastPrice，這是 100% 準確的今日最低價，
-# 不需要自己在 WebSocket 逐筆成交訊息裡累加追蹤，也不會有 fallback 價格
-# （yfinance / 歷史收盤）污染追蹤值的問題。
-#
-# 用 st.cache_data 做較長的快取（預設 20 秒），是因為主畫面每 REFRESH_SEC
-# （預設 3 秒）就會整頁重跑一次；如果每次重跑都對每一檔股票呼叫一次 REST，
-# 在多檔股票、多個群組的情況下很容易撞到富邦 REST 的流量限制（429 Rate limit
-# exceeded）。今日最低價這種資料一旦成立基本不會頻繁變動，用 20 秒快取
-# 對「跳空判斷」這個用途來說已經足夠即時。
 FUBON_OHLC_CACHE_TTL_SEC = 20
-
 
 @st.cache_data(ttl=FUBON_OHLC_CACHE_TTL_SEC, show_spinner=False)
 def fetch_fubon_intraday_ohlc(_sdk, code: str):
-    """
-    透過富邦官方 REST API 取得指定股票「今天」的官方 OHLC。
-    _sdk 開頭加底線，st.cache_data 不會嘗試對它做 hash。
-    回傳失敗時丟出例外，由呼叫端決定是否要 fallback 回自己追蹤的邏輯。
-    """
     reststock = _sdk.marketdata.rest_client.stock
     quote = reststock.intraday.quote(symbol=code)
     return {
@@ -468,14 +423,7 @@ def fetch_fubon_intraday_ohlc(_sdk, code: str):
         "lastPrice": quote.get("lastPrice"),
     }
 
-
 def get_official_today_low(manager, symbol: str):
-    """
-    嘗試用富邦 REST API 取得「今天」官方最低價（lowPrice）。
-    任何情況取得失敗（未登入、非交易時段、觸發流量限制等）都回傳 None，
-    讓呼叫端可以無痛 fallback 回自己追蹤的 session_low 邏輯，不會讓整個
-    畫面因為這支 API 失敗而掛掉。
-    """
     try:
         sdk = getattr(manager, "sdk", None)
         if sdk is None:
@@ -489,41 +437,31 @@ def get_official_today_low(manager, symbol: str):
     except Exception:
         return None
 
-
 def render_taiex_chart():
     st.markdown("#### 📈 台股加權指數（TSE）即時走勢")
-
     manager = st.session_state.fubon_manager
     sdk = getattr(manager, "sdk", None)
-
     if not st.session_state.fubon_logged_in or sdk is None:
         st.info("尚未登入富邦帳號，登入後即可顯示加權指數即時走勢（資料來源：富邦 API）。")
         return
-
     try:
         data = fetch_taiex_intraday(sdk)
     except Exception as e:
         st.warning(f"加權指數資料取得失敗：{e}")
         return
-
     quote = data.get("quote") or {}
     candles_resp = data.get("candles") or {}
     rows = candles_resp.get("data") or []
-
     if not rows:
         st.info("目前無加權指數分鐘資料（可能尚未開盤或休市）。")
         return
 
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"])
-
-    # 交易時段固定為 09:00–13:30，X 軸也固定這個範圍、每 30 分鐘一格，
-    # 不會因為資料只到某個時間點就把整條線拉長或壓縮版面。
     session_date = df["date"].iloc[0].date()
     session_tz = df["date"].dt.tz
     session_start = pd.Timestamp.combine(session_date, pd.Timestamp("09:00").time()).tz_localize(session_tz)
     session_end = pd.Timestamp.combine(session_date, pd.Timestamp("13:30").time()).tz_localize(session_tz)
-
     last_price = quote.get("lastPrice") or quote.get("closePrice") or float(df["close"].iloc[-1])
     prev_close = quote.get("previousClose") or quote.get("referencePrice")
     change = quote.get("change")
@@ -535,7 +473,7 @@ def render_taiex_chart():
         change_pct = (change / prev_close * 100) if (change is not None and prev_close) else None
 
     is_up = (change or 0) >= 0
-    line_color = "#dc2626" if is_up else "#16a34a"  # 台股慣例：紅漲綠跌
+    line_color = "#dc2626" if is_up else "#16a34a"
     fill_color = "rgba(220,38,38,0.08)" if is_up else "rgba(22,163,74,0.08)"
     sign = "+" if (change or 0) >= 0 else ""
 
@@ -544,9 +482,6 @@ def render_taiex_chart():
     m2.metric("漲跌", f"{sign}{change:,.2f}" if change is not None else "—")
     m3.metric("漲跌幅", f"{sign}{change_pct:,.2f}%" if change_pct is not None else "—")
 
-    # 加權指數本身是四萬多點的絕對值，但當日震盪通常只有幾百點；
-    # 如果用 fill="tozeroy" 會強迫 Y 軸從 0 開始，把整天的漲跌壓成貼齊頂端的一條線。
-    # 這裡改用「以資料範圍為主、留一點邊界」的方式讓曲線的起伏看得出來。
     y_values = pd.concat([df["close"], pd.Series([prev_close] if prev_close is not None else [])])
     y_min, y_max = float(y_values.min()), float(y_values.max())
     y_span = max(y_max - y_min, 1.0)
@@ -583,7 +518,7 @@ def render_taiex_chart():
         xaxis=dict(
             type="date",
             range=[session_start, session_end],
-            dtick=30 * 60 * 1000,  # 每 30 分鐘一格
+            dtick=30 * 60 * 1000,
             tickformat="%H:%M",
             showgrid=True,
             gridcolor="rgba(255,255,255,0.08)",
@@ -608,7 +543,6 @@ def render_taiex_chart():
         except Exception:
             pass
 
-
 # =============================================================================
 # 分組讀寫
 # =============================================================================
@@ -623,20 +557,16 @@ def load_stock_groups():
             pass
     return copy.deepcopy(DEFAULT_STOCK_GROUPS)
 
-
 def save_stock_groups(groups):
     with open(GROUPS_FILE, "w", encoding="utf-8") as f:
         json.dump(groups, f, ensure_ascii=False, indent=2)
 
-
 def ensure_backup_dir():
     os.makedirs(BACKUP_DIR, exist_ok=True)
-
 
 def create_backup_filename():
     tw_now = datetime.now(TW_TZ)
     return f"stock_groups_backup_{tw_now.strftime('%Y%m%d_%H%M%S')}.json"
-
 
 def save_backup_snapshot(groups):
     ensure_backup_dir()
@@ -645,7 +575,6 @@ def save_backup_snapshot(groups):
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(groups, f, ensure_ascii=False, indent=2)
     return file_path
-
 
 def list_backup_files():
     if not os.path.exists(BACKUP_DIR):
@@ -658,7 +587,6 @@ def list_backup_files():
                 files.append((name, os.path.getmtime(full_path)))
     files.sort(key=lambda x: x[1], reverse=True)
     return [name for name, _ in files]
-
 
 def validate_and_normalize_group_json(data):
     if not isinstance(data, dict) or not data:
@@ -699,7 +627,6 @@ def send_telegram_message(text: str):
     except Exception as e:
         st.error(f"Telegram 連線失敗: {e}")
 
-
 def check_telegram_push_command():
     if not TELEGRAM_BOT_TOKEN:
         return False
@@ -727,7 +654,7 @@ def check_telegram_push_command():
     return False
 
 # =============================================================================
-# yfinance：今日以前歷史資料
+# Yfinance 歷史資料讀取
 # =============================================================================
 @st.cache_data(ttl=YFINANCE_HISTORY_CACHE_TTL_SEC)
 def _download_stock_data_yfinance_history_cached(symbol: str, today_str: str):
@@ -781,10 +708,50 @@ def _download_stock_data_yfinance_history_cached(symbol: str, today_str: str):
 
     raise ValueError(f"無法取得 yfinance 歷史資料。已嘗試：{', '.join(candidates)}。最後錯誤：{last_error}")
 
-
-def download_stock_data(symbol):
+# =============================================================================
+# 批次取得歷史資料 (整合 SQLite 本地資料庫)
+# =============================================================================
+def bulk_get_history(symbols, source_mode):
+    history_map = {}
     today_str = datetime.now(TW_TZ).strftime("%Y-%m-%d")
-    return _download_stock_data_yfinance_history_cached(symbol, today_str)
+    today = pd.to_datetime(today_str).date()
+    
+    # 1. 優先嘗試從本地資料庫讀取
+    if source_mode == "本地資料庫(twse_ohlcv.db)":
+        if os.path.exists(DB_NAME):
+            try:
+                # 轉成唯一代碼以節省查詢量
+                codes = list(set([symbol_to_code(s) for s in symbols]))
+                placeholders = ",".join(["?"] * len(codes))
+                query = f"SELECT SecurityCode, Date, Open, High, Low, Close, Volume FROM ohlcv_data WHERE SecurityCode IN ({placeholders}) ORDER BY Date ASC"
+                
+                with sqlite3.connect(DB_NAME) as conn:
+                    df_all = pd.read_sql(query, conn, params=codes)
+                
+                if not df_all.empty:
+                    df_all["Date"] = pd.to_datetime(df_all["Date"])
+                    # 歷史資料庫只取到「昨天為止」
+                    df_all = df_all[df_all["Date"].dt.date < today]
+                    
+                    for code, group in df_all.groupby("SecurityCode"):
+                        # 將 DB 回傳的純代碼對應回原本含後綴的 symbol
+                        matched_symbols = [s for s in symbols if symbol_to_code(s) == code]
+                        for s in matched_symbols:
+                            history_map[s] = group[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
+            except Exception as e:
+                st.sidebar.warning(f"讀取本地資料庫失敗: {e}")
+        else:
+            st.sidebar.warning(f"找不到本地資料庫 {DB_NAME}，自動切換至 Yfinance。")
+            
+    # 2. 針對沒撈到或資料長度不足的，自動回退到 Yfinance 補齊
+    for s in symbols:
+        if s not in history_map or len(history_map[s]) < 20:
+            try:
+                history_map[s] = _download_stock_data_yfinance_history_cached(s, today_str)
+            except Exception:
+                history_map[s] = pd.DataFrame()
+                
+    return history_map
 
 def normalize_ohlc(df):
     if df is None or df.empty:
@@ -795,13 +762,11 @@ def normalize_ohlc(df):
         return df[keep_cols].copy()
     return pd.DataFrame()
 
-
 def is_fubon_realtime_time():
     now = datetime.now(TW_TZ).time()
     start = datetime.strptime("09:00", "%H:%M").time()
     end = datetime.strptime("13:30", "%H:%M").time()
     return start <= now < end
-
 
 def parse_price_value(value):
     if value is None:
@@ -825,7 +790,6 @@ def parse_price_value(value):
     except Exception:
         return None
 
-
 def get_yfinance_fast_info_price(symbol: str):
     candidates = [str(symbol).strip().upper()] + [
         s for s in build_yfinance_candidates(symbol)
@@ -846,7 +810,6 @@ def get_yfinance_fast_info_price(symbol: str):
             last_error = f"{yf_symbol}: {e}"
             continue
     raise ValueError(f"yfinance fast_info 無法取得 {symbol} 價格。最後錯誤：{last_error}")
-
 
 @st.cache_data(ttl=30)
 def get_yahoo_tw_quote_price(symbol: str):
@@ -890,7 +853,6 @@ def get_yahoo_tw_quote_price(symbol: str):
         last_error = f"{yahoo_symbol}: 找不到可用價格欄位"
     raise ValueError(f"Yahoo TW 無法取得 {symbol} 價格。最後錯誤：{last_error}")
 
-
 @st.cache_data(ttl=30)
 def get_yfinance_latest_daily_close(symbol: str):
     last_error = ""
@@ -920,7 +882,6 @@ def get_yfinance_latest_daily_close(symbol: str):
         last_row = daily_df.iloc[-1]
         return float(last_row["Close"]), pd.to_datetime(last_row["Date"]).date(), yf_symbol
     raise ValueError(f"yfinance daily 無法取得 {symbol} 最新收盤價。最後錯誤：{last_error}")
-
 
 def after_1330_price_logic(symbol, df, forced=False):
     last_hist_close = None
@@ -962,10 +923,10 @@ def after_1330_price_logic(symbol, df, forced=False):
         return last_hist_close, "Forced 13:30 history fallback" if forced else "history after 13:30"
     raise ValueError("無法取得 13:30 後價格")
 
-
 def get_last_price(symbol, df, manager=None):
     mode = st.session_state.get("price_source_override", "auto")
     use_fubon_ws = is_fubon_realtime_time()
+    
     if mode == "websocket":
         if manager is None:
             raise ValueError("強制 WebSocket 模式，但富邦 manager 尚未建立")
@@ -973,12 +934,15 @@ def get_last_price(symbol, df, manager=None):
         if ws_price is not None and pd.notna(ws_price):
             return float(ws_price), "Forced WebSocket"
         raise ValueError("強制 WebSocket 模式，但尚未收到此股票的 WebSocket trades 成交價")
+        
     if mode == "yfinance":
         return after_1330_price_logic(symbol, df, forced=True)
+        
     if manager is not None and use_fubon_ws:
         ws_price = manager.get_price(symbol)
         if ws_price is not None and pd.notna(ws_price):
             return float(ws_price), "Fubon WebSocket trades"
+            
     if use_fubon_ws:
         try:
             yf_price, _ = get_yfinance_fast_info_price(symbol)
@@ -988,6 +952,7 @@ def get_last_price(symbol, df, manager=None):
         if df is not None and not df.empty and "Close" in df.columns:
             return float(df["Close"].iloc[-1]), "history fallback"
         raise ValueError("無法取得即時價格")
+        
     return after_1330_price_logic(symbol, df, forced=False)
 
 # =============================================================================
@@ -1020,7 +985,6 @@ def load_stock_name_map(file_path: str = STOCK_NAME_FILE) -> dict:
                 name_map[symbol_to_code(symbol)] = name
     return name_map
 
-
 @st.cache_data(ttl=86400)
 def get_stock_name(symbol: str) -> str:
     name_map = load_stock_name_map(STOCK_NAME_FILE)
@@ -1047,40 +1011,6 @@ def get_stock_name(symbol: str) -> str:
     except Exception:
         pass
     return code
-
-
-@st.cache_data(ttl=86400)
-def load_stock_lookup_maps(file_path: str = STOCK_NAME_FILE) -> dict:
-    code_to_name = {}
-    code_to_symbol = {}
-    name_to_symbol = {}
-    if not os.path.exists(file_path):
-        return {"code_to_name": code_to_name, "code_to_symbol": code_to_symbol, "name_to_symbol": name_to_symbol}
-    with open(file_path, "r", encoding="utf-8") as f:
-        for raw_line in f:
-            line = raw_line.strip()
-            if not line:
-                continue
-            line = line.replace("\ufeff", "").replace("\u3000", " ").strip()
-            if "\t" in line:
-                parts = [p.strip() for p in line.split("\t") if p.strip()]
-            else:
-                m = re.match(r"^([^\s]+)\s+(.+)$", line)
-                parts = [m.group(1).strip(), m.group(2).strip()] if m else []
-            if len(parts) < 2:
-                continue
-            raw_symbol = parts[0].upper()
-            stock_name = parts[1].strip()
-            symbol = normalize_lookup_symbol(raw_symbol)
-            code = symbol_to_code(symbol)
-            if not code or not stock_name:
-                continue
-            code_to_name[code] = stock_name
-            code_to_symbol[code] = symbol
-            name_to_symbol[stock_name] = symbol
-            name_to_symbol[stock_name.replace(" ", "")] = symbol
-    return {"code_to_name": code_to_name, "code_to_symbol": code_to_symbol, "name_to_symbol": name_to_symbol}
-
 
 def resolve_stock_query(input_text: str):
     q_raw = str(input_text).strip()
@@ -1118,33 +1048,9 @@ def resolve_stock_query(input_text: str):
 # =============================================================================
 # 盤中最低價追蹤（供跳空訊號使用）
 # =============================================================================
-# 只有「真正的即時成交價」才可以拿來更新/建立當天的最低價紀錄。
-# 富邦 WebSocket 尚未連上、或該股票今天還沒有任何一筆 WS 成交進來時，
-# get_last_price() 會 fallback 到 yfinance / 歷史收盤價（甚至直接就是「昨收」）；
-# 這種價格不代表今天真的有成交在那個價位，如果拿去更新追蹤最低價，
-# 會把追蹤值錯誤地押在昨收附近，之後就算股票鎖漲停一整天，
-# session_low 也永遠低於昨天最高價，導致跳空訊號整天都不會觸發
-# （例如 2303 開盤直接鎖漲停在121，但因為第一次抓值時 WS 還沒送出成交，
-# fallback 抓到「history fallback」＝昨收110，把110記成當天最低價，
-# 之後即使真的收到121的成交價，110仍是全天最小值，跳空條件永遠不成立）。
 TRUSTED_INTRADAY_LOW_SOURCES = {"Fubon WebSocket trades", "Forced WebSocket"}
 
-
 def update_intraday_low(symbol: str, price_val: float, now_dt, price_source: str = None) -> float:
-    """
-    追蹤每檔股票「今天」實際看過的最低成交價。
-
-    富邦 WebSocket 逐筆成交訊息只有單一成交價，沒有當日最低價欄位；如果每次
-    刷新都只拿「這一筆」價格去判斷是否跳空，價格只要稍微上下跳動，跳空訊號
-    就會一直忽有忽無。這裡用 st.session_state 把每檔股票「今天」看過的最低價
-    記錄下來，換日時自動重置，讓跳空判斷有穩定、連續的依據。
-
-    price_source 為 None，或不在 TRUSTED_INTRADAY_LOW_SOURCES 內時（例如
-    "yfinance fallback"、"history fallback" 這類非即時成交來源），這筆價格
-    不會被寫入/拉低追蹤值，避免用不可信的價格污染整天的最低價紀錄；
-    若當天目前為止都還沒有任何可信紀錄，則暫時原樣回傳這筆價格，
-    等真正的即時成交進來後追蹤值會自動修正。
-    """
     if "intraday_low_tracker" not in st.session_state:
         st.session_state.intraday_low_tracker = {}
     tracker = st.session_state.intraday_low_tracker
@@ -1156,7 +1062,6 @@ def update_intraday_low(symbol: str, price_val: float, now_dt, price_source: str
         return record["low"] if (record is not None and record.get("date") == today_str) else price_val
 
     if not is_trusted:
-        # 不可信來源：只讀不寫，若當天還沒有任何可信紀錄則先暫時回傳這筆價格本身。
         if record is not None and record.get("date") == today_str:
             return record["low"]
         return price_val
@@ -1167,7 +1072,6 @@ def update_intraday_low(symbol: str, price_val: float, now_dt, price_source: str
     if price_val < record["low"]:
         record["low"] = price_val
     return record["low"]
-
 
 # =============================================================================
 # 指標計算
@@ -1253,17 +1157,6 @@ def compute_indicators(df, price, session_low=None):
     else:
         kd_signal = "-"
 
-    # ===== 跳空訊號判斷（修正版）=====
-    # 舊版問題：直接把「當下這一筆成交價」當成「今日最低價」來跟昨天最高價比較。
-    # 富邦 WebSocket 逐筆成交只會回傳單一成交價，並不包含當日真正的最低價欄位，
-    # 所以每次刷新都用最新的一筆價格去判斷，會隨盤中價格上下跳動而忽有忽無，
-    # 而且完全沒有「今天真的有沒有跳空」的記憶。
-    # 修正邏輯：
-    #   1. session_low：由外部持續追蹤「今天到目前為止」看到的最低成交價（見
-    #      update_intraday_low()），取代單一 tick 當作今日最低價，可避免瞬間雜訊。
-    #   2. 只有在 session_low 仍然高於昨天最高價，且「目前價格」還沒有跌回平盤
-    #      （<= 昨收）時，才視為跳空成立；一旦價格跌回昨收（平盤）以下，
-    #      視為跳空已回補，訊號自動取消。
     if session_low is None or pd.isna(session_low):
         session_low = price_val
     today_low = float(min(session_low, price_val))
@@ -1302,7 +1195,6 @@ def format_color(val):
         return f"{val:.2f}%"
     return val
 
-
 def format_k(val):
     if isinstance(val, (int, float)):
         if val >= 74:
@@ -1312,12 +1204,10 @@ def format_k(val):
         return f"🟢 {val:.1f}"
     return val
 
-
 def format_gap(val):
     if val == "跳空":
         return "🔴 跳空"
     return "-"
-
 
 def build_top3_html(valid_stock_stats):
     if not valid_stock_stats:
@@ -1335,7 +1225,6 @@ def build_top3_html(valid_stock_stats):
             f'<span style="color:{pct_color}; font-weight:600;">{pct_text}</span>'
         )
     return " | ".join(parts)
-
 
 def render_summary_dashboard(group_up_summary, rise_threshold):
     st.markdown('<div id="dashboard-top" style="scroll-margin-top: 90px;"></div>', unsafe_allow_html=True)
@@ -1431,18 +1320,14 @@ if "_quick_add_success_message" in st.session_state:
     st.toast(st.session_state._quick_add_success_message)
     del st.session_state._quick_add_success_message
 
-
 def set_next_selected_group(group_name: str):
     st.session_state._next_selected_group = group_name
-
 
 def enter_edit_mode():
     st.session_state.editing_mode = True
 
-
 def leave_edit_mode():
     st.session_state.editing_mode = False
-
 
 def sync_editor_fields_from_selected_group():
     groups = st.session_state.stock_groups
@@ -1466,7 +1351,6 @@ def get_fubon_pfx_base64():
         return st.secrets["fubon"]["pfx_base64"]
     except Exception:
         return ""
-
 
 def render_fubon_login():
     st.sidebar.markdown("## 🔑 富邦 WebSocket 即時價")
@@ -1548,7 +1432,6 @@ def render_group_editor_lock():
             st.rerun()
         else:
             st.sidebar.error("PIN 錯誤")
-
 
 def render_stock_group_editor():
     st.sidebar.markdown("## 🛠️ 股票分組編輯")
@@ -1858,28 +1741,36 @@ with st.sidebar.expander("📡 富邦 WebSocket 狀態", expanded=True):
     if status["error"]:
         st.warning(status["error"])
 
-with st.sidebar.expander("🕒 價格來源模式", expanded=True):
+with st.sidebar.expander("🕒 價格與歷史資料模式", expanded=True):
     current_mode = st.session_state.get("price_source_override", "auto")
-    if current_mode == "websocket":
-        st.info("目前價格模式：強制 WebSocket。再次按 WebSocket 可回到自動模式。")
+    modes = ["auto", "yfinance", "本地資料庫(twse_ohlcv.db)", "websocket"]
+    
+    def format_mode_label(m):
+        if m == "auto": return "自動 (盤中 WS / 盤後 YF)"
+        elif m == "yfinance": return "Yfinance (全 YF 備援)"
+        elif m == "本地資料庫(twse_ohlcv.db)": return "本地資料庫(twse_ohlcv.db) + 即時報價"
+        elif m == "websocket": return "強制 WebSocket"
+        return m
+
+    new_mode = st.radio(
+        "選擇資料來源",
+        options=modes,
+        index=modes.index(current_mode) if current_mode in modes else 0,
+        format_func=format_mode_label
+    )
+    
+    if new_mode != current_mode:
+        st.session_state.price_source_override = new_mode
+        st.rerun()
+
+    if current_mode == "auto":
+        st.info("自動：盤中 WS / 盤後 YF")
     elif current_mode == "yfinance":
-        st.info("目前價格模式：強制 Yfinance，抓值邏輯同 13:30 後。再次按 Yfinance 可回到自動模式。")
-    else:
-        if is_fubon_realtime_time():
-            st.info("目前價格模式：自動；09:00~13:30 優先 WebSocket")
-        else:
-            st.info("目前價格模式：自動；13:30 後使用 yfinance；若為昨收則抓 Yahoo TW")
-    mode_col1, mode_col2 = st.columns(2)
-    with mode_col1:
-        ws_button_type = "primary" if current_mode == "websocket" else "secondary"
-        if st.button("WebSocket", key="force_websocket_price_btn", width="stretch", type=ws_button_type):
-            st.session_state.price_source_override = "auto" if current_mode == "websocket" else "websocket"
-            st.rerun()
-    with mode_col2:
-        yf_button_type = "primary" if current_mode == "yfinance" else "secondary"
-        if st.button("Yfinance", key="force_yfinance_price_btn", width="stretch", type=yf_button_type):
-            st.session_state.price_source_override = "auto" if current_mode == "yfinance" else "yfinance"
-            st.rerun()
+        st.info("全 Yfinance 模式")
+    elif current_mode == "本地資料庫(twse_ohlcv.db)":
+        st.info("歷史資料由 SQLite 提供，今日報價由 WS/YF 提供")
+    elif current_mode == "websocket":
+        st.info("強制只使用 WebSocket 價格")
 
 can_push_now = False
 current_schedule_key = None
@@ -1909,6 +1800,11 @@ if st.session_state.tg_push_enabled:
                     can_push_now = True
                     break
 
+# 🚀 批次預先抓取所有群組的歷史資料 (判斷如果是本地資料庫，就去 SQLite 取；否則去 YFinance 取)
+all_unique_symbols = tuple(sorted({s for stocks in st.session_state.stock_groups.values() for s in stocks}))
+active_price_source = st.session_state.get("price_source_override", "auto")
+history_map = bulk_get_history(all_unique_symbols, active_price_source)
+
 group_tables = {}
 group_up_summary = []
 for group_name, stocks in st.session_state.stock_groups.items():
@@ -1918,15 +1814,15 @@ for group_name, stocks in st.session_state.stock_groups.items():
     hit_names = []
     for symbol in stocks:
         try:
-            raw_df = download_stock_data(symbol)
+            # 改為直接從預先抓好的 history_map 取出 DataFrame
+            raw_df = history_map.get(symbol, pd.DataFrame())
             df = normalize_ohlc(raw_df)
             if df.empty:
-                raise ValueError("無法解析 yfinance 欄位格式")
+                raise ValueError("無法解析資料欄位格式 (資料庫或 Yfinance 回傳為空)")
+                
             price, price_source = get_last_price(symbol, df, manager)
             stock_name = get_stock_name(symbol)
-            # 優先使用富邦官方 REST 今日最低價（100% 準確，交易所自己算好的）；
-            # 失敗（未登入、非交易時段、觸發流量限制等）才 fallback 回自己
-            # 用 WS 逐筆成交追蹤的 session_low，確保任何情況下都不會整頁掛掉。
+            
             official_low = get_official_today_low(manager, symbol)
             if official_low is not None:
                 session_low = official_low
@@ -2061,8 +1957,6 @@ for group_name, info in group_tables.items():
             },
         )
     else:
-        # 「股票名稱」欄位底色標示漲停 / 跌停：
-        # 紅底＝漲停（漲跌% >= 9.5%），綠底＝跌停（漲跌% <= -9.5%），符合台股慣例（紅漲綠跌）。
         pct_series = table_df["_pct_raw"]
         display_df_view = table_df[display_columns]
 
