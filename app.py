@@ -435,6 +435,61 @@ def fetch_taiex_intraday(_sdk):
     return {"quote": quote, "candles": candles}
 
 
+# =============================================================================
+# 富邦 REST：個股「今天」官方 OHLC（取代自己土法煉鋼追蹤的 session_low）
+# =============================================================================
+# 富邦官方 REST API 的 intraday.quote() 會直接回傳「今天」交易所算好的
+# openPrice / highPrice / lowPrice / lastPrice，這是 100% 準確的今日最低價，
+# 不需要自己在 WebSocket 逐筆成交訊息裡累加追蹤，也不會有 fallback 價格
+# （yfinance / 歷史收盤）污染追蹤值的問題。
+#
+# 用 st.cache_data 做較長的快取（預設 20 秒），是因為主畫面每 REFRESH_SEC
+# （預設 3 秒）就會整頁重跑一次；如果每次重跑都對每一檔股票呼叫一次 REST，
+# 在多檔股票、多個群組的情況下很容易撞到富邦 REST 的流量限制（429 Rate limit
+# exceeded）。今日最低價這種資料一旦成立基本不會頻繁變動，用 20 秒快取
+# 對「跳空判斷」這個用途來說已經足夠即時。
+FUBON_OHLC_CACHE_TTL_SEC = 20
+
+
+@st.cache_data(ttl=FUBON_OHLC_CACHE_TTL_SEC, show_spinner=False)
+def fetch_fubon_intraday_ohlc(_sdk, code: str):
+    """
+    透過富邦官方 REST API 取得指定股票「今天」的官方 OHLC。
+    _sdk 開頭加底線，st.cache_data 不會嘗試對它做 hash。
+    回傳失敗時丟出例外，由呼叫端決定是否要 fallback 回自己追蹤的邏輯。
+    """
+    reststock = _sdk.marketdata.rest_client.stock
+    quote = reststock.intraday.quote(symbol=code)
+    return {
+        "previousClose": quote.get("previousClose"),
+        "openPrice": quote.get("openPrice"),
+        "highPrice": quote.get("highPrice"),
+        "lowPrice": quote.get("lowPrice"),
+        "lastPrice": quote.get("lastPrice"),
+    }
+
+
+def get_official_today_low(manager, symbol: str):
+    """
+    嘗試用富邦 REST API 取得「今天」官方最低價（lowPrice）。
+    任何情況取得失敗（未登入、非交易時段、觸發流量限制等）都回傳 None，
+    讓呼叫端可以無痛 fallback 回自己追蹤的 session_low 邏輯，不會讓整個
+    畫面因為這支 API 失敗而掛掉。
+    """
+    try:
+        sdk = getattr(manager, "sdk", None)
+        if sdk is None:
+            return None
+        code = symbol_to_code(symbol)
+        ohlc = fetch_fubon_intraday_ohlc(sdk, code)
+        low_price = ohlc.get("lowPrice")
+        if low_price is None:
+            return None
+        return float(low_price)
+    except Exception:
+        return None
+
+
 def render_taiex_chart():
     st.markdown("#### 📈 台股加權指數（TSE）即時走勢")
 
@@ -1871,7 +1926,16 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 raise ValueError("無法解析 yfinance 欄位格式")
             price, price_source = get_last_price(symbol, df, manager)
             stock_name = get_stock_name(symbol)
-            session_low = update_intraday_low(symbol, price, tw_now, price_source)
+            # 優先使用富邦官方 REST 今日最低價（100% 準確，交易所自己算好的）；
+            # 失敗（未登入、非交易時段、觸發流量限制等）才 fallback 回自己
+            # 用 WS 逐筆成交追蹤的 session_low，確保任何情況下都不會整頁掛掉。
+            official_low = get_official_today_low(manager, symbol)
+            if official_low is not None:
+                session_low = official_low
+                low_source = "官方 REST"
+            else:
+                session_low = update_intraday_low(symbol, price, tw_now, price_source)
+                low_source = "自行追蹤"
             data = compute_indicators(df, price, session_low)
 
             is_high_gain = data["pct"] >= 5
@@ -1922,6 +1986,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "_pct_raw": float(data["pct"]),
                 "_debug_yesterday_high": data["yesterday_high"],
                 "_debug_today_low_tracked": data["today_low_tracked"],
+                "_debug_low_source": low_source,
             })
         except Exception as e:
             error_count += 1
@@ -1942,6 +2007,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "_pct_raw": None,
                 "_debug_yesterday_high": None,
                 "_debug_today_low_tracked": None,
+                "_debug_low_source": "-",
             })
 
     hit_names_text = compact_name_list(hit_names, max_show=4)
@@ -2041,8 +2107,9 @@ for group_name, info in group_tables.items():
             debug_cols = ["代碼", "股票名稱", "價格", "昨收", "跳空訊號", "價格來源"]
             debug_df = table_df[debug_cols].copy()
             debug_df["昨天最高價"] = table_df["_debug_yesterday_high"]
-            debug_df["今日追蹤最低價"] = table_df["_debug_today_low_tracked"]
-            debug_df["今日追蹤最低價 > 昨天最高價？"] = table_df.apply(
+            debug_df["今日最低價"] = table_df["_debug_today_low_tracked"]
+            debug_df["最低價來源"] = table_df["_debug_low_source"]
+            debug_df["今日最低價 > 昨天最高價？"] = table_df.apply(
                 lambda r: (
                     "-" if pd.isna(r["_debug_today_low_tracked"]) or pd.isna(r["_debug_yesterday_high"])
                     else ("是" if r["_debug_today_low_tracked"] > r["_debug_yesterday_high"] else "否")
@@ -2050,11 +2117,11 @@ for group_name, info in group_tables.items():
                 axis=1,
             )
             st.caption(
-                "「今日追蹤最低價」是目前 session 累積到的最小可信成交價（見 update_intraday_low）。"
-                "若這個值明顯等於或接近「昨收」，代表追蹤值曾被 fallback 價格（yfinance/history）"
-                "污染過，或曾經真的跌破昨天最高價、之後全天不會再恢復——除非 app 重新啟動"
-                "（換日或重啟會重置追蹤值）。若「價格來源」不是「Fubon WebSocket trades」，"
-                "代表目前這一筆是 fallback 價，不會被拿去更新追蹤值。"
+                "「今日最低價」優先使用富邦官方 REST API（intraday.quote 的 lowPrice，交易所自己算好的，"
+                "100% 準確），「最低價來源」欄會顯示是「官方 REST」還是退回「自行追蹤」。"
+                "只有在 REST 取得失敗（未登入、非交易時段、觸發流量限制）時才會退回自己用 WS "
+                "逐筆成交追蹤的 session_low，這時才可能出現追蹤值被 fallback 價格污染、"
+                "或早期漏接某筆低點之後全天不會恢復的情況。"
             )
             st.dataframe(debug_df, width="stretch", hide_index=True)
 
