@@ -861,15 +861,17 @@ def get_db_latest_price(symbol: str):
     return float(close), str(date_str)
 
 
-def get_history_data_source_mode() -> str:
-    """回傳目前歷史資料來源模式：yfinance / db_history（歷史用DB，當日仍走原邏輯）/ db_all（全部用DB）。"""
-    return st.session_state.get("history_data_source", "yfinance")
-
-
 def download_stock_data(symbol):
     today_str = datetime.now(TW_TZ).strftime("%Y-%m-%d")
-    mode = get_history_data_source_mode()
-    if mode in ("db_history", "db_all"):
+
+    if st.session_state.get("post_market_enabled", False):
+        source = st.session_state.get("post_market_source", "db")
+        if source == "db":
+            return _download_stock_data_db_cached(symbol, today_str, include_today=False)
+        return _download_stock_data_yfinance_history_cached(symbol, today_str)
+
+    source = st.session_state.get("history_source", "db")
+    if source == "db":
         return _download_stock_data_db_cached(symbol, today_str, include_today=False)
     return _download_stock_data_yfinance_history_cached(symbol, today_str)
 
@@ -1051,23 +1053,22 @@ def after_1330_price_logic(symbol, df, forced=False):
 
 
 def get_last_price(symbol, df, manager=None):
-    if get_history_data_source_mode() == "db_all":
-        db_price, db_date_str = get_db_latest_price(symbol)
+    if st.session_state.get("post_market_enabled", False):
+        source = st.session_state.get("post_market_source", "db")
         today_str = datetime.now(TW_TZ).strftime("%Y-%m-%d")
-        source_label = "TWSE DB（今日）" if db_date_str == today_str else f"TWSE DB（最新收盤 {db_date_str}）"
-        return float(db_price), source_label
+        if source == "db":
+            db_price, db_date_str = get_db_latest_price(symbol)
+            source_label = "TWSE DB（今日）" if db_date_str == today_str else f"TWSE DB（最新收盤 {db_date_str}）"
+            return float(db_price), source_label
+        daily_close, daily_date, _ = get_yfinance_latest_daily_close(symbol)
+        source_label = "yfinance（今日收盤）" if str(daily_date) == today_str else f"yfinance（最新收盤 {daily_date}）"
+        return float(daily_close), source_label
 
-    mode = st.session_state.get("price_source_override", "auto")
-    use_fubon_ws = is_fubon_realtime_time()
-    if mode == "websocket":
-        if manager is None:
-            raise ValueError("強制 WebSocket 模式，但富邦 manager 尚未建立")
-        ws_price = manager.get_price(symbol)
-        if ws_price is not None and pd.notna(ws_price):
-            return float(ws_price), "Forced WebSocket"
-        raise ValueError("強制 WebSocket 模式，但尚未收到此股票的 WebSocket trades 成交價")
-    if mode == "yfinance":
+    realtime_source = st.session_state.get("realtime_source", "fubon")
+    if realtime_source == "yfinance":
         return after_1330_price_logic(symbol, df, forced=True)
+
+    use_fubon_ws = is_fubon_realtime_time()
     if manager is not None and use_fubon_ws:
         ws_price = manager.get_price(symbol)
         if ws_price is not None and pd.notna(ws_price):
@@ -1492,10 +1493,14 @@ if "fubon_manager" not in st.session_state:
     st.session_state.fubon_manager = FubonRealtimeManager()
 if "fubon_logged_in" not in st.session_state:
     st.session_state.fubon_logged_in = False
-if "price_source_override" not in st.session_state:
-    st.session_state.price_source_override = "auto"
-if "history_data_source" not in st.session_state:
-    st.session_state.history_data_source = "yfinance"
+if "realtime_source" not in st.session_state:
+    st.session_state.realtime_source = "fubon"       # 即時資料（當日資料）：fubon(預設) / yfinance
+if "history_source" not in st.session_state:
+    st.session_state.history_source = "db"            # 歷史資料（當日以前的資料）：db(預設) / yfinance
+if "post_market_enabled" not in st.session_state:
+    st.session_state.post_market_enabled = False       # 盤後資料（當日+歷史資料）模式開關
+if "post_market_source" not in st.session_state:
+    st.session_state.post_market_source = "db"          # 盤後資料來源：db(預設) / yfinance
 if "selected_group_editor" not in st.session_state:
     group_names_init = list(st.session_state.stock_groups.keys())
     st.session_state.selected_group_editor = group_names_init[0] if group_names_init else ""
@@ -1907,36 +1912,76 @@ with ctrl_col4:
 
 gc.collect()
 
-with st.sidebar.expander("🗄️ 資料來源設定", expanded=True):
-    HISTORY_SOURCE_OPTIONS = {
-        "yfinance": "yfinance（原始邏輯，預設）",
-        "db_history": "twse_ohlcv.db（歷史）＋ 富邦/yfinance（當日，13:30 切換不變）",
-        "db_all": "twse_ohlcv.db（全部資料，含當日）",
-    }
-    _hist_keys = list(HISTORY_SOURCE_OPTIONS.keys())
-    _hist_labels = list(HISTORY_SOURCE_OPTIONS.values())
-    _current_hist_mode = st.session_state.get("history_data_source", "yfinance")
-    _selected_label = st.radio(
-        "歷史資料來源",
-        options=_hist_labels,
-        index=_hist_keys.index(_current_hist_mode) if _current_hist_mode in _hist_keys else 0,
-        key="history_data_source_radio",
-    )
-    _selected_key = _hist_keys[_hist_labels.index(_selected_label)]
-    if _selected_key != _current_hist_mode:
-        st.session_state.history_data_source = _selected_key
-        st.rerun()
+with st.sidebar.expander("📊 資料來源設定", expanded=True):
+    st.caption("綠色為建議預設值")
 
-    if _selected_key == "db_all":
-        st.caption("⚠️ 歷史與當日價格全部由 twse_ohlcv.db 讀取，不使用富邦 WebSocket / yfinance。")
-        if not os.path.exists(TWSE_DB_PATH):
-            st.error(f"找不到資料庫檔案：{TWSE_DB_PATH}（請確認檔案已放在程式同一目錄）")
-    elif _selected_key == "db_history":
-        st.caption("歷史資料改由 twse_ohlcv.db 讀取；當日即時價格邏輯不變（09:00–13:30 富邦，之後 yfinance）。")
-        if not os.path.exists(TWSE_DB_PATH):
-            st.error(f"找不到資料庫檔案：{TWSE_DB_PATH}（請確認檔案已放在程式同一目錄）")
-    else:
-        st.caption("歷史與當日價格皆使用原本 yfinance / 富邦邏輯。")
+    # 第一列：即時資料（當日資料）
+    st.markdown("**⏱️ 即時資料（當日資料）**")
+    _rt_current = st.session_state.get("realtime_source", "fubon")
+    _rt_label = st.radio(
+        "即時資料來源",
+        options=["富邦 WebSocket", "Yfinance"],
+        index=0 if _rt_current == "fubon" else 1,
+        horizontal=True,
+        key="realtime_source_radio",
+        label_visibility="collapsed",
+    )
+    _rt_new = "fubon" if _rt_label == "富邦 WebSocket" else "yfinance"
+    if _rt_new != _rt_current:
+        st.session_state.realtime_source = _rt_new
+        st.rerun()
+    st.caption("13:30 前富邦，13:30 切到 yfinance（選 Yfinance 則全天強制使用 yfinance）")
+
+    st.divider()
+
+    # 第二列：歷史資料（當日以前的資料）
+    st.markdown("**📜 歷史資料（當日以前的資料）**")
+    _hist_current = st.session_state.get("history_source", "db")
+    _hist_label = st.radio(
+        "歷史資料來源",
+        options=["twse_ohlcv.db", "Yfinance"],
+        index=0 if _hist_current == "db" else 1,
+        horizontal=True,
+        key="history_source_radio",
+        label_visibility="collapsed",
+    )
+    _hist_new = "db" if _hist_label == "twse_ohlcv.db" else "yfinance"
+    if _hist_new != _hist_current:
+        st.session_state.history_source = _hist_new
+        st.rerun()
+    if _hist_new == "db" and not os.path.exists(TWSE_DB_PATH):
+        st.error(f"找不到資料庫檔案：{TWSE_DB_PATH}")
+
+    st.divider()
+
+    # 第三列：盤後資料（當日+歷史資料）
+    st.markdown("**🌙 盤後資料（當日+歷史資料）**")
+    _pm_enabled = st.checkbox(
+        "啟用盤後資料模式（覆蓋以上兩項設定，當日＋歷史資料合併由單一來源讀取）",
+        value=st.session_state.get("post_market_enabled", False),
+        key="post_market_enabled_checkbox",
+    )
+    if _pm_enabled != st.session_state.get("post_market_enabled", False):
+        st.session_state.post_market_enabled = _pm_enabled
+        st.rerun()
+    _pm_current = st.session_state.get("post_market_source", "db")
+    _pm_label = st.radio(
+        "盤後資料來源",
+        options=["twse_ohlcv.db", "Yfinance"],
+        index=0 if _pm_current == "db" else 1,
+        horizontal=True,
+        key="post_market_source_radio",
+        label_visibility="collapsed",
+        disabled=not _pm_enabled,
+    )
+    _pm_new = "db" if _pm_label == "twse_ohlcv.db" else "yfinance"
+    if _pm_new != _pm_current:
+        st.session_state.post_market_source = _pm_new
+        st.rerun()
+    if _pm_enabled:
+        st.caption("⚠️ 已啟用：當日與歷史資料一律合併讀取，不使用富邦 WebSocket。")
+        if _pm_new == "db" and not os.path.exists(TWSE_DB_PATH):
+            st.error(f"找不到資料庫檔案：{TWSE_DB_PATH}")
 
 render_fubon_login()
 render_group_editor_lock()
@@ -1984,30 +2029,21 @@ with st.sidebar.expander("📡 富邦 WebSocket 狀態", expanded=True):
     if status["error"]:
         st.warning(status["error"])
 
-with st.sidebar.expander("🕒 價格來源模式", expanded=True):
-    if get_history_data_source_mode() == "db_all":
-        st.warning("目前「資料來源設定」為 twse_ohlcv.db（全部資料），當日價格一律取自資料庫，此處設定暫不生效。")
-    current_mode = st.session_state.get("price_source_override", "auto")
-    if current_mode == "websocket":
-        st.info("目前價格模式：強制 WebSocket。再次按 WebSocket 可回到自動模式。")
-    elif current_mode == "yfinance":
-        st.info("目前價格模式：強制 Yfinance，抓值邏輯同 13:30 後。再次按 Yfinance 可回到自動模式。")
+with st.sidebar.expander("🕒 目前資料來源狀態", expanded=True):
+    if st.session_state.get("post_market_enabled", False):
+        _pm_src = st.session_state.get("post_market_source", "db")
+        st.info(f"盤後資料模式：當日＋歷史資料皆來自 {'twse_ohlcv.db' if _pm_src == 'db' else 'yfinance'}")
     else:
-        if is_fubon_realtime_time():
-            st.info("目前價格模式：自動；09:00~13:30 優先 WebSocket")
+        _rt_src = st.session_state.get("realtime_source", "fubon")
+        _hist_src = st.session_state.get("history_source", "db")
+        if _rt_src == "fubon":
+            if is_fubon_realtime_time():
+                st.info("即時資料：09:00~13:30 優先富邦 WebSocket")
+            else:
+                st.info("即時資料：13:30 後自動切到 yfinance")
         else:
-            st.info("目前價格模式：自動；13:30 後使用 yfinance；若為昨收則抓 Yahoo TW")
-    mode_col1, mode_col2 = st.columns(2)
-    with mode_col1:
-        ws_button_type = "primary" if current_mode == "websocket" else "secondary"
-        if st.button("WebSocket", key="force_websocket_price_btn", width="stretch", type=ws_button_type):
-            st.session_state.price_source_override = "auto" if current_mode == "websocket" else "websocket"
-            st.rerun()
-    with mode_col2:
-        yf_button_type = "primary" if current_mode == "yfinance" else "secondary"
-        if st.button("Yfinance", key="force_yfinance_price_btn", width="stretch", type=yf_button_type):
-            st.session_state.price_source_override = "auto" if current_mode == "yfinance" else "yfinance"
-            st.rerun()
+            st.info("即時資料：強制使用 yfinance")
+        st.caption(f"歷史資料來源：{'twse_ohlcv.db' if _hist_src == 'db' else 'yfinance'}")
 
 can_push_now = False
 current_schedule_key = None
