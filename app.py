@@ -23,7 +23,7 @@ import threading
 import sqlite3
 import requests
 from html import escape
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -734,10 +734,28 @@ def check_telegram_push_command():
 # yfinance：今日以前歷史資料
 # =============================================================================
 @st.cache_data(ttl=YFINANCE_HISTORY_CACHE_TTL_SEC)
+def get_history_cutoff_date(today_str: str):
+    """回傳「歷史資料」允許的日期上界（不含此日期）。
+
+    平日：直接用今天的日期即可（今天的 K 線本來就還沒收，歷史資料自然只到昨天）。
+    週六／週日：因為沒有新的交易日，最新一筆歷史資料（週五收盤）會被
+    get_last_price() 的「當日價格」重複抓到，導致「價格」與「昨收」變成同一天、
+    漲跌% 恆為 0%。此時把上界往前推到週五，讓歷史資料只到週四，
+    週五那筆改由「當日價格」呈現，避免重複。
+    """
+    today = pd.to_datetime(today_str).date()
+    weekday = today.weekday()  # Mon=0 ... Sat=5, Sun=6
+    if weekday == 5:  # 週六 -> 上界為週五
+        return today - timedelta(days=1)
+    if weekday == 6:  # 週日 -> 上界為週五
+        return today - timedelta(days=2)
+    return today
+
+
 def _download_stock_data_yfinance_history_cached(symbol: str, today_str: str):
     candidates = build_yfinance_candidates(symbol)
     last_error = ""
-    today = pd.to_datetime(today_str).date()
+    today = get_history_cutoff_date(today_str)
 
     for yf_symbol in candidates:
         try:
@@ -802,7 +820,7 @@ def _download_stock_data_db_cached(symbol: str, today_str: str, include_today: b
 
     code = symbol_to_code(symbol)
     market = symbol_to_db_market(symbol)
-    today = pd.to_datetime(today_str).date()
+    today = get_history_cutoff_date(today_str)
 
     conn = sqlite3.connect(TWSE_DB_PATH)
     try:
