@@ -44,7 +44,6 @@ TW_TZ = ZoneInfo("Asia/Taipei")
 REFRESH_SEC = 3
 YFINANCE_HISTORY_CACHE_TTL_SEC = 60 * 60  # yfinance 今日以前歷史資料每小時更新一次
 HISTORY_CACHE_TTL = YFINANCE_HISTORY_CACHE_TTL_SEC
-ENABLE_GAP_SIGNAL = True
 LIMIT_UP_DOWN_PCT_THRESHOLD = 9.5  # 台股漲跌停約為 ±10%，抓 9.5% 以上視為漲/跌停（含極端接近漲跌停）
 GROUP_EDIT_PIN = "1219"
 GROUPS_FILE = "stock_groups.json"
@@ -494,6 +493,35 @@ def get_official_today_low(manager, symbol: str):
         return None
 
 
+def get_official_today_ohlc(manager, symbol: str) -> dict:
+    """
+    嘗試用富邦 REST API 取得「今天」官方開高低價（openPrice/highPrice/lowPrice）。
+    供 signal_module 訊號計算使用（很多型態訊號需要真正的當日開高低，
+    不是只靠單一 tick 價格）。任何情況取得失敗都回傳全 None 的 dict，
+    讓呼叫端可以無痛 fallback 回自己追蹤的 session_low/session_high 邏輯。
+    """
+    try:
+        sdk = getattr(manager, "sdk", None)
+        if sdk is None:
+            return {"open": None, "high": None, "low": None}
+        code = symbol_to_code(symbol)
+        ohlc = fetch_fubon_intraday_ohlc(sdk, code)
+
+        def _to_float(v):
+            try:
+                return float(v) if v is not None else None
+            except Exception:
+                return None
+
+        return {
+            "open": _to_float(ohlc.get("openPrice")),
+            "high": _to_float(ohlc.get("highPrice")),
+            "low": _to_float(ohlc.get("lowPrice")),
+        }
+    except Exception:
+        return {"open": None, "high": None, "low": None}
+
+
 def render_taiex_chart():
     st.markdown("#### 📈 台股加權指數（TSE）即時走勢")
 
@@ -682,6 +710,82 @@ def validate_and_normalize_group_json(data):
     if not validated:
         raise ValueError("JSON 內容為空")
     return validated
+
+# =============================================================================
+# GitHub 讀寫（stock_groups.json）
+# =============================================================================
+def github_repo_config():
+    return {
+        "token": get_secret_or_default("GITHUB_TOKEN", ""),
+        "owner": get_secret_or_default("GITHUB_OWNER", "henglunlin"),
+        "repo": get_secret_or_default("GITHUB_REPO", "henglunlin-stock-monitor-FUBAN"),
+        "branch": get_secret_or_default("GITHUB_BRANCH", "main"),
+    }
+
+
+def fetch_stock_groups_from_github() -> dict:
+    """
+    直接從 GitHub repo 讀取最新版 stock_groups.json（走 raw.githubusercontent.com，
+    公開 repo 不需要 token 就能讀）。失敗會丟出例外，由呼叫端處理提示訊息。
+    """
+    cfg = github_repo_config()
+    url = f"https://raw.githubusercontent.com/{cfg['owner']}/{cfg['repo']}/{cfg['branch']}/stock_groups.json"
+    res = requests.get(url, timeout=15)
+    res.raise_for_status()
+    data = res.json()
+    return validate_and_normalize_group_json(data)
+
+
+def upload_file_to_github(file_bytes: bytes, github_path: str, commit_message: str) -> bool:
+    """透過 GitHub Contents API 建立/更新一個檔案，需要 Secrets 設定 GITHUB_TOKEN 才能寫入。"""
+    cfg = github_repo_config()
+    token, owner, repo, branch = cfg["token"], cfg["owner"], cfg["repo"], cfg["branch"]
+    if not token or not owner or not repo:
+        return False
+
+    github_path = github_path.strip("/")
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{github_path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    sha = None
+    try:
+        get_res = requests.get(url, headers=headers, params={"ref": branch}, timeout=15)
+        if get_res.status_code == 200:
+            sha = get_res.json().get("sha")
+
+        payload = {
+            "message": commit_message,
+            "content": base64.b64encode(file_bytes).decode("utf-8"),
+            "branch": branch,
+        }
+        if sha:
+            payload["sha"] = sha
+
+        put_res = requests.put(url, headers=headers, json=payload, timeout=30)
+        return put_res.status_code in (200, 201)
+    except Exception:
+        return False
+
+
+def upload_stock_groups_to_github(groups: dict, commit_message: str = "Update stock_groups.json via monitor app") -> bool:
+    content = json.dumps(groups, ensure_ascii=False, indent=2).encode("utf-8")
+    return upload_file_to_github(content, "stock_groups.json", commit_message)
+
+
+def persist_stock_groups(groups: dict):
+    """
+    分組存檔的統一入口：一定先存本機 stock_groups.json（掃描迴圈讀的是這份），
+    如果使用者有勾選「同步到 GitHub」，且 Secrets 有設定 GITHUB_TOKEN，才會額外推回 GitHub。
+    """
+    save_stock_groups(groups)
+    if st.session_state.get("sync_groups_to_github", False):
+        if upload_stock_groups_to_github(groups):
+            st.sidebar.success("已同步更新到 GitHub 的 stock_groups.json。")
+        else:
+            st.sidebar.warning("同步 GitHub 失敗，請確認 Secrets 中的 GITHUB_TOKEN / GITHUB_OWNER / GITHUB_REPO 設定。")
 
 # =============================================================================
 # Telegram
@@ -1281,10 +1385,35 @@ def update_intraday_low(symbol: str, price_val: float, now_dt, price_source: str
     return record["low"]
 
 
+def update_intraday_high(symbol: str, price_val: float, now_dt, price_source: str = None) -> float:
+    """與 update_intraday_low() 對稱：追蹤每檔股票「今天」實際看過的最高成交價（供 signal_module 訊號使用）。"""
+    if "intraday_high_tracker" not in st.session_state:
+        st.session_state.intraday_high_tracker = {}
+    tracker = st.session_state.intraday_high_tracker
+    today_str = now_dt.strftime("%Y-%m-%d")
+    record = tracker.get(symbol)
+    is_trusted = price_source is None or price_source in TRUSTED_INTRADAY_LOW_SOURCES
+
+    if pd.isna(price_val):
+        return record["high"] if (record is not None and record.get("date") == today_str) else price_val
+
+    if not is_trusted:
+        if record is not None and record.get("date") == today_str:
+            return record["high"]
+        return price_val
+
+    if record is None or record.get("date") != today_str:
+        tracker[symbol] = {"date": today_str, "high": price_val}
+        return price_val
+    if price_val > record["high"]:
+        record["high"] = price_val
+    return record["high"]
+
+
 # =============================================================================
 # 指標計算
 # =============================================================================
-def compute_indicators(df, price, session_low=None):
+def compute_indicators(df, price):
     if df is None or df.empty:
         raise ValueError("下載資料為空")
     if len(df) < 20:
@@ -1298,7 +1427,6 @@ def compute_indicators(df, price, session_low=None):
         raise ValueError("OHLC 資料格式異常")
 
     yesterday_close = float(close.iloc[-1])
-    yesterday_high = float(high.iloc[-1])
     if pd.isna(yesterday_close) or yesterday_close == 0:
         raise ValueError("昨收資料異常")
 
@@ -1349,47 +1477,9 @@ def compute_indicators(df, price, session_low=None):
 
     k_t = float(k.iloc[-1])
     d_t = float(d.iloc[-1])
-    k_y = float(k.iloc[-2])
-    d_y = float(d.iloc[-2])
 
-    if k_y <= d_y and k_t > d_t:
-        kd_signal = "黃金交叉"
-    elif k_y >= d_y and k_t < d_t:
-        kd_signal = "死亡交叉"
-    elif k_t < d_t and (d_t - k_t) < 3:
-        kd_signal = "即將黃金交叉"
-    elif k_t > d_t and (k_t - d_t) < 3:
-        kd_signal = "即將死亡交叉"
-    elif k_t < 25:
-        kd_signal = "超賣"
-    else:
-        kd_signal = "-"
-
-    # ===== 跳空訊號判斷（修正版）=====
-    # 舊版問題：直接把「當下這一筆成交價」當成「今日最低價」來跟昨天最高價比較。
-    # 富邦 WebSocket 逐筆成交只會回傳單一成交價，並不包含當日真正的最低價欄位，
-    # 所以每次刷新都用最新的一筆價格去判斷，會隨盤中價格上下跳動而忽有忽無，
-    # 而且完全沒有「今天真的有沒有跳空」的記憶。
-    # 修正邏輯：
-    #   1. session_low：由外部持續追蹤「今天到目前為止」看到的最低成交價（見
-    #      update_intraday_low()），取代單一 tick 當作今日最低價，可避免瞬間雜訊。
-    #   2. 只有在 session_low 仍然高於昨天最高價，且「目前價格」還沒有跌回平盤
-    #      （<= 昨收）時，才視為跳空成立；一旦價格跌回昨收（平盤）以下，
-    #      視為跳空已回補，訊號自動取消。
-    if session_low is None or pd.isna(session_low):
-        session_low = price_val
-    today_low = float(min(session_low, price_val))
-
-    gap_signal = "-"
-    if (
-        ENABLE_GAP_SIGNAL
-        and pd.notna(today_low)
-        and pd.notna(yesterday_high)
-        and today_low > yesterday_high
-        and price_val > yesterday_close
-    ):
-        gap_signal = "跳空"
-
+    # KD黃金交叉/跳空訊號的判斷已經移交給 signal_module（見下方「訊號模組銜接」，
+    # 對應主表格的「買賣訊號」欄位），這裡只保留 K值/D值/MA位置/MA排列 供顯示用。
     return {
         "price": round(price_val, 2),
         "pct": round(change_pct, 2),
@@ -1398,9 +1488,123 @@ def compute_indicators(df, price, session_low=None):
         "ma_trend": ma_trend,
         "k": round(k_t, 1),
         "d": round(d_t, 1),
-        "kd_signal": kd_signal,
-        "gap_signal": gap_signal,
     }
+
+# =============================================================================
+# 訊號模組 (signal_module) 銜接
+# =============================================================================
+# 沿用跟「台股掃描器」repo 相同的 signal_module/（KD高腳、三白兵、布林縮窄突破...
+# 等 17 個可編輯訊號檔案）。這裡把它接到本監控面板既有的即時資料流程：
+# 用歷史日K + 「今天」即時開高低收組成當日這一根K棒，餵給 signal_module 算指標、跑訊號，
+# 再依照「優先等級」規則收斂成單一「買賣訊號」欄位。
+from signal_module import module_loader
+from signal_module.base import SIGNAL_REGISTRY, SignalContext as ModuleSignalContext
+from signal_module.indicators import add_indicators as _sm_add_indicators
+
+if not SIGNAL_REGISTRY:
+    module_loader.load_default_signal_modules()
+
+# 訊號優先等級：數字越小越重要（1 > 2 > 3）。同一天如果同等級的訊號一起觸發，就一起顯示；
+# 等級不同時只顯示等級數字最小（最重要）的那些。
+# key 對應到 signal_module 各檔案 register_signal() 裡的 label。
+# 不在下面清單內的訊號（例如漲幅達標）預設視為最低優先等級 3，可自行調整。
+SIGNAL_PRIORITY = {
+    "布林縮窄突破": 1,
+    "反向島狀": 1,
+    "3K反轉": 2,
+    "巧妙點": 2,
+    "雙跳空": 2,
+    "雙漲停": 2,
+    "島狀反轉": 2,
+    "KD高腳": 2,
+    "跌停": 2,
+    "單跳空": 2,
+    "周1K": 2,
+    "廣義下降三法": 3,
+    "漲停": 3,
+    "移動停利": 3,
+    "廣義上升三法": 3,
+    "三白兵": 3,
+}
+SIGNAL_PRIORITY_DEFAULT = 3
+
+
+def get_signal_registry():
+    return SIGNAL_REGISTRY
+
+
+def _prepare_signal_dataframe(df: pd.DataFrame, open_val: float, high_val: float, low_val: float, close_val: float) -> pd.DataFrame:
+    """
+    用歷史日K + 「今天」即時開高低收，組成 signal_module 需要的格式：
+    index = Date字串、由舊到新排序，並附上 K/D/MA/Bias/BBand 等技術指標欄位。
+    """
+    work = df.copy()
+    if "Date" not in work.columns:
+        work = work.reset_index().rename(columns={work.reset_index().columns[0]: "Date"})
+    work["Date"] = pd.to_datetime(work["Date"], errors="coerce")
+    work = work.dropna(subset=["Date"]).sort_values("Date").reset_index(drop=True)
+    if work.empty:
+        raise ValueError("下載資料為空")
+
+    today_ts = pd.Timestamp(datetime.now(TW_TZ).date())
+    if work["Date"].iloc[-1].normalize() == today_ts:
+        work = work.iloc[:-1]  # 避免資料源已含當日K時重複疊加
+
+    today_row = pd.DataFrame([{
+        "Date": today_ts, "Open": open_val, "High": high_val, "Low": low_val, "Close": close_val, "Volume": 0,
+    }])
+    work = pd.concat([work[["Date", "Open", "High", "Low", "Close", "Volume"]], today_row], ignore_index=True)
+
+    work = work.set_index(work["Date"].dt.strftime("%Y-%m-%d"))[["Open", "High", "Low", "Close", "Volume"]]
+    work.index.name = "Date"
+    work = _sm_add_indicators(work)
+    return work
+
+
+def run_stock_signals(symbol, name, df, open_val, high_val, low_val, close_val, rise_threshold=5.0):
+    """
+    對單一股票跑過全部已註冊訊號。
+    回傳 (hit_list, display_text)：
+      hit_list：依優先等級排序的命中訊號清單 [{"label","kind","priority","detail"}, ...]
+      display_text：套用「優先等級」規則後的顯示文字
+                     （數字越小越重要；同一天同等級的訊號一起觸發就一起顯示）
+    """
+    try:
+        df_ind = _prepare_signal_dataframe(df, open_val, high_val, low_val, close_val)
+    except Exception:
+        return [], "-"
+
+    scan_date = df_ind.index[-1]
+    ctx = ModuleSignalContext(
+        code=symbol, name=name, df=df_ind, scan_date=scan_date,
+        params={"rise_threshold": rise_threshold},
+    )
+
+    hit_list = []
+    for key, cfg in SIGNAL_REGISTRY.items():
+        try:
+            result = cfg["func"](ctx)
+        except Exception:
+            continue
+        if getattr(result, "hit", False):
+            label = cfg["label"]
+            hit_list.append({
+                "label": label,
+                "kind": cfg.get("kind", "buy"),
+                "priority": SIGNAL_PRIORITY.get(label, SIGNAL_PRIORITY_DEFAULT),
+                "detail": result.detail,
+            })
+
+    if not hit_list:
+        return [], "-"
+
+    hit_list.sort(key=lambda h: h["priority"])
+    top_priority = hit_list[0]["priority"]
+    top_hits = [h for h in hit_list if h["priority"] == top_priority]
+    display_text = "、".join(f"{h['label']}({'買' if h['kind'] == 'buy' else '賣'})" for h in top_hits)
+    return hit_list, display_text
+
+
 
 # =============================================================================
 # UI 格式
@@ -1425,10 +1629,15 @@ def format_k(val):
     return val
 
 
-def format_gap(val):
-    if val == "跳空":
-        return "🔴 跳空"
-    return "-"
+def format_signal(val):
+    """買賣訊號欄位上色：買進偏紅、賣出偏綠（與漲跌%的紅漲綠跌配色一致）。"""
+    if not val or val == "-":
+        return "-"
+    if "(賣)" in val:
+        return f"🟢 {val}"
+    if "(買)" in val:
+        return f"🔴 {val}"
+    return val
 
 
 def build_top3_html(valid_stock_stats):
@@ -1533,6 +1742,8 @@ if "notified_stocks" not in st.session_state:
     st.session_state.notified_stocks = set()
 if "intraday_low_tracker" not in st.session_state:
     st.session_state.intraday_low_tracker = {}
+if "intraday_high_tracker" not in st.session_state:
+    st.session_state.intraday_high_tracker = {}
 if "tg_last_update_id" not in st.session_state:
     st.session_state.tg_last_update_id = None
 if "_next_selected_group" in st.session_state:
@@ -1670,6 +1881,13 @@ def render_group_editor_lock():
 
 def render_stock_group_editor():
     st.sidebar.markdown("## 🛠️ 股票分組編輯")
+    st.sidebar.checkbox(
+        "☁️ 編輯分組時同步提交到 GitHub",
+        value=st.session_state.get("sync_groups_to_github", False),
+        key="sync_groups_to_github",
+        help="需要在 Secrets 設定 GITHUB_TOKEN（且 GITHUB_OWNER/GITHUB_REPO/GITHUB_BRANCH 正確），"
+             "否則勾選了也只會存在本機（下次重新部署會遺失）。",
+    )
     groups = st.session_state.stock_groups
     group_names = list(groups.keys())
     if not group_names:
@@ -1694,7 +1912,7 @@ def render_stock_group_editor():
             else:
                 groups[name] = []
                 st.session_state.stock_groups = groups
-                save_stock_groups(groups)
+                persist_stock_groups(groups)
                 set_next_selected_group(name)
                 st.rerun()
 
@@ -1735,7 +1953,7 @@ def render_stock_group_editor():
                         current_list.append(symbol)
                         groups[selected_group] = current_list
                         st.session_state.stock_groups = groups
-                        save_stock_groups(groups)
+                        persist_stock_groups(groups)
                         set_next_selected_group(selected_group)
                         st.session_state._clear_quick_add_symbol_input = True
                         if stock_name_for_msg:
@@ -1756,7 +1974,7 @@ def render_stock_group_editor():
                     for k, v in groups.items():
                         updated[new_name if k == selected_group else k] = normalize_symbols_from_text(symbols_text) if k == selected_group else v
                     st.session_state.stock_groups = updated
-                    save_stock_groups(updated)
+                    persist_stock_groups(updated)
                     leave_edit_mode()
                     set_next_selected_group(new_name)
                     st.rerun()
@@ -1767,10 +1985,30 @@ def render_stock_group_editor():
                 else:
                     groups.pop(selected_group, None)
                     st.session_state.stock_groups = groups
-                    save_stock_groups(groups)
+                    persist_stock_groups(groups)
                     leave_edit_mode()
                     set_next_selected_group(list(groups.keys())[0])
                     st.rerun()
+
+    with st.sidebar.expander("☁️ GitHub 同步", expanded=False):
+        st.caption(f"repo：{github_repo_config()['owner']}/{github_repo_config()['repo']}（分支：{github_repo_config()['branch']}）")
+        if st.button("📥 從 GitHub 讀取最新 stock_groups.json", key="pull_groups_from_github_btn", width="stretch"):
+            try:
+                fetched = fetch_stock_groups_from_github()
+                save_backup_snapshot(st.session_state.stock_groups)
+                st.session_state.stock_groups = fetched
+                save_stock_groups(fetched)  # 本身就是從 GitHub 讀來的，只存本機快取，不用再推回去
+                leave_edit_mode()
+                set_next_selected_group(list(fetched.keys())[0])
+                st.sidebar.success("已從 GitHub 讀取最新股票分組。")
+                st.rerun()
+            except Exception as e:
+                st.sidebar.error(f"從 GitHub 讀取失敗：{e}")
+        if st.button("☁️ 手動推送目前分組到 GitHub", key="push_groups_to_github_btn", width="stretch"):
+            if upload_stock_groups_to_github(st.session_state.stock_groups):
+                st.sidebar.success("已推送到 GitHub。")
+            else:
+                st.sidebar.warning("推送失敗，請確認 Secrets 中的 GITHUB_TOKEN / GITHUB_OWNER / GITHUB_REPO 設定。")
 
     with st.sidebar.expander("📦 備份 / 匯出 / 匯入 JSON", expanded=False):
         export_json_str = json.dumps(st.session_state.stock_groups, ensure_ascii=False, indent=2)
@@ -1791,7 +2029,7 @@ def render_stock_group_editor():
                     validated = validate_and_normalize_group_json(data)
                     save_backup_snapshot(st.session_state.stock_groups)
                     st.session_state.stock_groups = validated
-                    save_stock_groups(validated)
+                    persist_stock_groups(validated)
                     leave_edit_mode()
                     set_next_selected_group(list(validated.keys())[0])
                     st.sidebar.success("JSON 匯入成功，已覆蓋目前股票分組")
@@ -1813,7 +2051,7 @@ def render_stock_group_editor():
             except Exception:
                 pass
             st.session_state.stock_groups = copy.deepcopy(DEFAULT_STOCK_GROUPS)
-            save_stock_groups(st.session_state.stock_groups)
+            persist_stock_groups(st.session_state.stock_groups)
             leave_edit_mode()
             set_next_selected_group(list(st.session_state.stock_groups.keys())[0])
             st.rerun()
@@ -2106,20 +2344,33 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 raise ValueError("無法解析 yfinance 欄位格式")
             price, price_source = get_last_price(symbol, df, manager)
             stock_name = get_stock_name(symbol)
-            # 優先使用富邦官方 REST 今日最低價（100% 準確，交易所自己算好的）；
+            # 優先使用富邦官方 REST 今日開高低價（100% 準確，交易所自己算好的）；
             # 失敗（未登入、非交易時段、觸發流量限制等）才 fallback 回自己
-            # 用 WS 逐筆成交追蹤的 session_low，確保任何情況下都不會整頁掛掉。
-            official_low = get_official_today_low(manager, symbol)
-            if official_low is not None:
-                session_low = official_low
+            # 用 WS 逐筆成交追蹤的 session_low / session_high，確保任何情況下都不會整頁掛掉。
+            official_ohlc = get_official_today_ohlc(manager, symbol)
+            if official_ohlc.get("low") is not None:
+                session_low = official_ohlc["low"]
             else:
                 session_low = update_intraday_low(symbol, price, tw_now, price_source)
-            data = compute_indicators(df, price, session_low)
+            if official_ohlc.get("high") is not None:
+                session_high = official_ohlc["high"]
+            else:
+                session_high = update_intraday_high(symbol, price, tw_now, price_source)
+            session_open = official_ohlc.get("open") if official_ohlc.get("open") is not None else price
+
+            data = compute_indicators(df, price)
+            signal_hits, signal_display = run_stock_signals(
+                symbol, stock_name, df,
+                open_val=session_open,
+                high_val=max(session_high, price),
+                low_val=min(session_low, price),
+                close_val=price,
+                rise_threshold=rise_threshold,
+            )
 
             is_high_gain = data["pct"] >= 5
-            has_kd_signal = data["kd_signal"] in ["黃金交叉", "即將黃金交叉"]
-            has_gap_signal = data["gap_signal"] == "跳空"
-            if is_high_gain or has_kd_signal or has_gap_signal:
+            has_priority_signal = bool(signal_hits)
+            if is_high_gain or has_priority_signal:
                 base_symbol = symbol.split('.')[0]
                 yahoo_url = f"https://tw.stock.yahoo.com/quote/{base_symbol}"
                 symbol_link = f'<a href="{yahoo_url}">{symbol}</a>'
@@ -2130,8 +2381,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                         f"🔔 <b>強勢股達標通知：{stock_name} ({symbol_link})</b>\n\n"
                         f"📈 價格：{data['price']}\n"
                         f"🔥 漲幅：{data['pct']:+.2f}%\n"
-                        f"📊 KD訊號：{data['kd_signal']}\n"
-                        f"🚀 跳空訊號：{data['gap_signal']}\n"
+                        f"📊 買賣訊號：{signal_display}\n"
                         f"📡 價格來源：{price_source}"
                     )
                     send_telegram_message(msg)
@@ -2158,8 +2408,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "MA排列": data["ma_trend"],
                 "K值": data["k"],
                 "D值": f"{data['d']:.1f}",
-                "KD訊號": data["kd_signal"],
-                "跳空訊號": data["gap_signal"],
+                "買賣訊號": signal_display,
                 "價格來源": price_source,
                 "_pct_raw": float(data["pct"]),
             })
@@ -2176,8 +2425,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 "MA排列": "-",
                 "K值": "-",
                 "D值": "-",
-                "KD訊號": "-",
-                "跳空訊號": str(e),
+                "買賣訊號": str(e),
                 "價格來源": "-",
                 "_pct_raw": None,
             })
@@ -2189,7 +2437,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
     if not display_df.empty:
         display_df["漲跌%"] = display_df["漲跌%"].apply(format_color)
         display_df["K值"] = display_df["K值"].apply(format_k)
-        display_df["跳空訊號"] = display_df["跳空訊號"].apply(format_gap)
+        display_df["買賣訊號"] = display_df["買賣訊號"].apply(format_signal)
     group_tables[group_name] = {"count": len(stocks), "table": display_df}
     group_up_summary.append({
         "分類": group_name,
@@ -2226,7 +2474,7 @@ for group_name, info in group_tables.items():
         table_df["代碼"] = table_df["代碼網址"]
     display_columns = [
         "代碼", "股票名稱", "價格", "昨收", "漲跌%", "MA位置", "MA排列",
-        "K值", "D值", "KD訊號", "跳空訊號", "價格來源",
+        "K值", "D值", "買賣訊號", "價格來源",
     ]
 
     if table_df.empty:
