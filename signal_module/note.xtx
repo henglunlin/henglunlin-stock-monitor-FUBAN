@@ -1,0 +1,17 @@
+檔名	訊號名	訊號優先等級	買賣訊號	規則	規則參數 (含寫死參數)
+3-K Reversal_60MA.py	3K反轉	2	買入	今收>昨高且今收>前收，昨收<=前高，前兩日至少一黑K，站上60MA，20/60MA乖離10%內	BIAS_MAX_THRESHOLD: 10.0均線天期: 60對比均線乖離: 20MA或60MA
+bband_breakout.py	布林縮窄突破	1	買入	前兩日內布林帶寬曾縮至12%內後，帶量(5MA)突破上軌	MAX_BANDWIDTH: 12.0VOL_MULTIPLIER: 1.5VOL_MA_PERIOD: 5
+Bearish Island Reversal.py	反向島狀	1	賣出	15日內先跳空向上，今日跳空向下，且前5日內無向下跳空	LOOKBACK_DAYS: 15EXCLUDE_GAP_DOWN_DAYS: 5
+clever_point.py	巧妙點	2	買入	掃描日站上60MA、量縮0.8倍、窄幅K線、乖離<26.5且BBand帶寬>=30%，前22日內曾突破	LOOKBACK_DAYS: 22BODY_RATIO_MAX: 30.0均線天期: 60量縮倍數: 0.820MA乖離率上限: 26.5布林帶寬下限: 30.0
+double_gap.py	雙跳空	2	買入	最近3根K線中有2根出現向上跳空	WINDOW: 3REQUIRED_GAPS: 2
+double_limit_up.py	雙漲停	2	買入	連續兩個交易日(含掃描日)收盤漲幅皆 >= 9.5%	漲幅門檻: 9.5%
+generalized_falling_three.py	廣義下降三法	3	賣出	基準長黑後經歷3~5根K線整理(允許1.5%假突破)，今日收盤跌破基準K最低價	MAX_SPIKE_TOLERANCE: 0.015整理K線數量: 3~5根
+island_reversal.py	島狀反轉	2	買入	15日內先跳空向下，今日跳空向上，且前5日內無向上跳空	LOOKBACK_DAYS: 15EXCLUDE_GAP_UP_DAYS: 5
+kd_gao_jiao.py	KD高腳	2	買入	今日KD黃金交叉，且K值高於前30個交易日內K<40的黃金交叉	LOOKBACK_DAYS: 30LOW_K_THRESHOLD: 50.0
+limit_down.py	跌停	2	賣出	當日收盤價觸及跌停 (相較前日收盤跌幅 >= 9.5%)	跌幅門檻: 9.5%
+limit_up.py	漲停	3	買入	當日收盤價觸及漲停 (相較前日收盤漲幅 >= 9.5%)	漲幅門檻: 9.5%
+moving_take_profit.py	移動停利	3	賣出	今日收盤價相較昨日收盤跌幅達 8% 以上	跌幅門檻: 8.0%
+Relaxed Rising Three Methods.py	廣義上升三法	3	買入	基準長紅後經歷3~4根K線整理(允許1.5%假跌破)，今日收盤突破基準K最高價	MAX_DRAWDOWN_TOLERANCE: 0.015整理K線數量: 3~4根
+single_gap.py	單跳空	2	買入	最近3根K線中至少有1根出現向上跳空	WINDOW: 3REQUIRED_GAPS: 1
+three_white_soldiers.py	三白兵	3	買入	3~4個交易日內(含今日)出現3根漲幅超過5%的紅K	WINDOW_DAYS: 4REQUIRED_HITS: 3PCT_THRESHOLD: 5.0
+Weekly_1K.py	周1K	2	買入	13周均線向上、有效紅K突破最近黑K高點（排除窄線型）	MIN_RED_BODY_PCT: 3.0MIN_BODY_TO_RANGE_RATIO: 0.50均線天期: 13周
