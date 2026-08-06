@@ -715,11 +715,28 @@ def validate_and_normalize_group_json(data):
 # GitHub 讀寫（stock_groups.json）
 # =============================================================================
 def github_repo_config():
+    """monitor 這個 repo 自己的設定 (henglunlin-stock-monitor-FUBAN)。"""
     return {
         "token": get_secret_or_default("GITHUB_TOKEN", ""),
         "owner": get_secret_or_default("GITHUB_OWNER", "henglunlin"),
         "repo": get_secret_or_default("GITHUB_REPO", "henglunlin-stock-monitor-FUBAN"),
         "branch": get_secret_or_default("GITHUB_BRANCH", "main"),
+    }
+
+
+def scanner_repo_config():
+    """
+    台股掃描器 repo (stock-scanner-FUBAN) 的設定。
+    precompute_trendlines.py 那邊的排程也需要讀最新的 stock_groups.json，
+    所以 monitor 這邊改動股票分組時，要順便同步推一份過去，兩邊才不會兜不起來。
+    預設沿用跟 monitor repo 同一組 GITHUB_TOKEN；如果這個 token 對 stock-scanner-FUBAN
+    沒有寫入權限，可以在 Secrets 另外設定 SCANNER_GITHUB_TOKEN 覆蓋。
+    """
+    return {
+        "token": get_secret_or_default("SCANNER_GITHUB_TOKEN", "") or get_secret_or_default("GITHUB_TOKEN", ""),
+        "owner": get_secret_or_default("SCANNER_GITHUB_OWNER", "henglunlin"),
+        "repo": get_secret_or_default("SCANNER_GITHUB_REPO", "stock-scanner-FUBAN"),
+        "branch": get_secret_or_default("SCANNER_GITHUB_BRANCH", "main"),
     }
 
 
@@ -736,10 +753,9 @@ def fetch_stock_groups_from_github() -> dict:
     return validate_and_normalize_group_json(data)
 
 
-def upload_file_to_github(file_bytes: bytes, github_path: str, commit_message: str) -> bool:
-    """透過 GitHub Contents API 建立/更新一個檔案，需要 Secrets 設定 GITHUB_TOKEN 才能寫入。"""
-    cfg = github_repo_config()
-    token, owner, repo, branch = cfg["token"], cfg["owner"], cfg["repo"], cfg["branch"]
+def upload_file_to_repo(file_bytes: bytes, github_path: str, commit_message: str, repo_cfg: dict) -> bool:
+    """透過 GitHub Contents API 建立/更新一個檔案，可以指定要推到哪個 repo (repo_cfg)。"""
+    token, owner, repo, branch = repo_cfg["token"], repo_cfg["owner"], repo_cfg["repo"], repo_cfg["branch"]
     if not token or not owner or not repo:
         return False
 
@@ -770,9 +786,29 @@ def upload_file_to_github(file_bytes: bytes, github_path: str, commit_message: s
         return False
 
 
+def upload_file_to_github(file_bytes: bytes, github_path: str, commit_message: str) -> bool:
+    """向下相容既有呼叫端: 預設推到本 repo (henglunlin-stock-monitor-FUBAN)。"""
+    return upload_file_to_repo(file_bytes, github_path, commit_message, github_repo_config())
+
+
 def upload_stock_groups_to_github(groups: dict, commit_message: str = "Update stock_groups.json via monitor app") -> bool:
+    """
+    推送 stock_groups.json，同時推到兩個 repo:
+    1. 本身這個 repo (henglunlin-stock-monitor-FUBAN)
+    2. 台股掃描器 repo (stock-scanner-FUBAN)，讓 precompute_trendlines.py 那邊的
+       每日排程也能讀到跟這裡一致的股票分組。
+    只要「本身這個 repo」成功就視為整體成功 (回傳 True)，
+    掃描器那邊推送失敗只會另外顯示警告，不會擋住本機/本repo的正常存檔流程。
+    """
     content = json.dumps(groups, ensure_ascii=False, indent=2).encode("utf-8")
-    return upload_file_to_github(content, "stock_groups.json", commit_message)
+    ok_self = upload_file_to_repo(content, "stock_groups.json", commit_message, github_repo_config())
+    ok_scanner = upload_file_to_repo(content, "stock_groups.json", commit_message, scanner_repo_config())
+    if ok_self and not ok_scanner:
+        st.sidebar.warning(
+            "stock_groups.json 已同步到 henglunlin-stock-monitor-FUBAN，"
+            "但推送到 stock-scanner-FUBAN 失敗（請確認該 repo 的 Secrets/Token 權限），不影響本機使用。"
+        )
+    return ok_self
 
 
 def persist_stock_groups(groups: dict):
