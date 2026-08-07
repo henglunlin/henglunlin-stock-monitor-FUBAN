@@ -1694,6 +1694,98 @@ def build_top3_html(valid_stock_stats):
     return " | ".join(parts)
 
 
+# =============================================================================
+# Excel 匯出（把目前畫面上每個分組的表格彙整成一份 Excel）
+# =============================================================================
+EXCEL_EXPORT_COLUMNS = [
+    "代碼", "股票名稱", "價格", "昨收", "漲跌%", "MA位置", "MA排列",
+    "K值", "D值", "買賣訊號", "價格來源",
+]
+
+
+def _contains_cjk(text) -> bool:
+    if text is None:
+        return False
+    s = str(text)
+    return any(
+        ("\u4e00" <= ch <= "\u9fff") or ("\u3400" <= ch <= "\u4dbf") or ("\uf900" <= ch <= "\ufaff")
+        for ch in s
+    )
+
+
+def _apply_excel_fonts(workbook):
+    """中英文分開套字型：中文用微軟正黑體，英數用 Calibri，Excel 開起來比較好看。"""
+    from openpyxl.styles import Font
+    for worksheet in workbook.worksheets:
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if cell.value is None:
+                    cell.font = Font(name="Calibri")
+                elif _contains_cjk(cell.value):
+                    cell.font = Font(name="Microsoft JhengHei")
+                else:
+                    cell.font = Font(name="Calibri")
+
+
+def _safe_excel_sheet_name(name: str, used_names: set) -> str:
+    """
+    Excel 分頁名稱規則：不能超過31字元、不能包含 : \\ / ? * [ ]、不能重複、不能是空字串。
+    分組名稱如果剛好違反這些規則(例如中文名稱剛好超長、或兩個分組去掉特殊字元後撞名)，
+    這裡會自動截短/補號碼，確保一定能成功寫入 Excel。
+    """
+    cleaned = re.sub(r'[:\\/?*\[\]]', "_", str(name)).strip() or "分組"
+    cleaned = cleaned[:31]
+    candidate = cleaned
+    suffix = 1
+    while candidate in used_names:
+        suffix_str = f"_{suffix}"
+        candidate = cleaned[: 31 - len(suffix_str)] + suffix_str
+        suffix += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def build_monitor_excel_bytes(group_tables: dict) -> bytes:
+    """
+    把目前畫面上每個分組的監控表格彙整成一份 Excel：
+    - 「全部彙總」分頁：所有分組合併在一起，多一欄「分類」方便篩選/排序
+    - 其餘每個分組各自一個分頁，跟畫面上顯示的分組一一對應
+    數值欄位(漲跌%/K值/D值)維持原始數字、買賣訊號不含emoji，方便在 Excel 裡排序/篩選/畫圖，
+    跟畫面上為了好讀而加的顏色/emoji裝飾分開處理。
+    """
+    from io import BytesIO
+
+    output = BytesIO()
+    used_sheet_names = set()
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        all_rows = []
+        for group_name, info in group_tables.items():
+            for row in info.get("raw_rows", []):
+                merged = {"分類": group_name}
+                merged.update({col: row.get(col) for col in EXCEL_EXPORT_COLUMNS})
+                all_rows.append(merged)
+
+        summary_columns = ["分類"] + EXCEL_EXPORT_COLUMNS
+        summary_df = pd.DataFrame(all_rows, columns=summary_columns) if all_rows else pd.DataFrame(columns=summary_columns)
+        summary_sheet_name = _safe_excel_sheet_name("全部彙總", used_sheet_names)
+        summary_df.to_excel(writer, sheet_name=summary_sheet_name, index=False)
+
+        for group_name, info in group_tables.items():
+            raw_rows = info.get("raw_rows", [])
+            group_df = (
+                pd.DataFrame(raw_rows, columns=EXCEL_EXPORT_COLUMNS)
+                if raw_rows else pd.DataFrame(columns=EXCEL_EXPORT_COLUMNS)
+            )
+            sheet_name = _safe_excel_sheet_name(group_name, used_sheet_names)
+            group_df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+        _apply_excel_fonts(writer.book)
+
+    output.seek(0)
+    return output.getvalue()
+
+
 def render_summary_dashboard(group_up_summary, rise_threshold):
     st.markdown('<div id="dashboard-top" style="scroll-margin-top: 90px;"></div>', unsafe_allow_html=True)
     st.markdown("### 📌 漲幅儀表板")
@@ -2474,7 +2566,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
         display_df["漲跌%"] = display_df["漲跌%"].apply(format_color)
         display_df["K值"] = display_df["K值"].apply(format_k)
         display_df["買賣訊號"] = display_df["買賣訊號"].apply(format_signal)
-    group_tables[group_name] = {"count": len(stocks), "table": display_df}
+    group_tables[group_name] = {"count": len(stocks), "table": display_df, "raw_rows": rows}
     group_up_summary.append({
         "分類": group_name,
         "達標數": hit_count,
@@ -2489,6 +2581,22 @@ for group_name, stocks in st.session_state.stock_groups.items():
 
 if can_push_now and st.session_state.scheduled_push_enabled and current_schedule_key and not manual_push_triggered:
     st.session_state.processed_time_slots.add(current_schedule_key)
+
+# ===== Excel 匯出：把這次掃描結果(全部分組)彙整成一份 Excel 供下載 =====
+excel_dl_col1, excel_dl_col2 = st.columns([1.6, 6.4], vertical_alignment="center")
+with excel_dl_col1:
+    monitor_excel_bytes = build_monitor_excel_bytes(group_tables)
+    monitor_excel_filename = f"monitor_snapshot_{tw_now.strftime('%Y%m%d_%H%M%S')}.xlsx"
+    st.download_button(
+        "📥 下載監控總表 Excel",
+        data=monitor_excel_bytes,
+        file_name=monitor_excel_filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="download_monitor_excel_btn",
+        width="stretch",
+    )
+with excel_dl_col2:
+    st.caption("Excel 含「全部彙總」分頁 + 各分組各自一個分頁，數值欄位保留原始數字方便排序/篩選。")
 
 render_summary_dashboard(group_up_summary, rise_threshold)
 st.divider()
