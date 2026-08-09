@@ -1210,27 +1210,23 @@ def after_1330_price_logic(symbol, df, forced=False):
     raise ValueError("無法取得 13:30 後價格")
 
 
-def extract_price_reference_date(price_source: str, fallback_date):
+def get_effective_trading_reference_date(reference_dt=None):
     """
-    大部分 price_source 字串在「這個價格不是真的今天」時會明確帶出日期，
-    例如 'TWSE DB（最新收盤 2026-08-07）'、'yfinance（最新收盤 2026-08-07）'。
-    這裡把這個日期解析出來，讓 compute_indicators() / _prepare_signal_dataframe()
-    知道「這個即時價格實際代表哪一天」，而不是一律假設等於呼叫當下的日曆日期。
+    取得「目前應該視為基準的交易日」，直接沿用跟 get_history_cutoff_date() 完全相同的規則
+    (平日=今天；週六往前推1天=週五；週日往前推2天=週五)，確保「今天是哪一天」的認知，
+    在抓歷史資料(download_stock_data)、算昨收(compute_indicators)、
+    跑訊號模組(_prepare_signal_dataframe) 這三個地方永遠一致。
 
-    這是一連串「明明沒跳空/沒跌停卻被誤判」bug的真正根源：週末/假日重新整理時，
-    「現在的日曆日期」(例如週日) 跟「這個價格實際代表的交易日」(例如上週五) 常常對不上，
-    之前的修法都還是在用日曆日期去猜，這裡改成直接讀取 price_source 裡已經有的真實日期，
-    不用再猜。找不到明確日期時 (例如 "Fubon WebSocket trades" 這種盤中即時來源，
-    本來就代表今天)，才退回原本傳入的 fallback_date。
+    上一版的作法是從 price_source 字串裡解析日期(例如 'TWSE DB（最新收盤 2026-08-07）')，
+    但這個字串不一定每次都帶日期(例如即時來源 "Fubon WebSocket trades" 就沒有)，
+    一旦沒解析到就會靜默退回日曆日期，週末又會重演一樣的 bug。
+    直接複用 get_history_cutoff_date() 的星期幾判斷邏輯就不會有這個問題，
+    也不用再猜——兩處用的是同一套規則。
+    ⚠️ 只用星期幾判斷，沒有內建台股國定假日行事曆。
     """
-    if price_source:
-        m = re.search(r"(\d{4}-\d{2}-\d{2})", str(price_source))
-        if m:
-            try:
-                return datetime.strptime(m.group(1), "%Y-%m-%d").date()
-            except Exception:
-                pass
-    return fallback_date
+    dt = reference_dt if reference_dt is not None else datetime.now(TW_TZ)
+    today_str = dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt)
+    return get_history_cutoff_date(today_str)
 
 
 def get_last_price(symbol, df, manager=None):
@@ -1490,14 +1486,13 @@ def compute_indicators(df, price, price_ref_date=None):
     # 跟訊號模組(單跳空/雙跳空/島狀反轉/反向島狀/跌停/漲停...等)實際判斷用的
     # 基準日對不起來。
     #
-    # 這裡改用 price_ref_date (從 price_source 字串解析出來的「這個價格實際代表哪一天」，
-    # 見 extract_price_reference_date())，不要再用「呼叫當下的日曆日期」去猜。
-    # 日曆日期在週末/假日重新整理時完全沒有意義(週日不是交易日)，而且
-    # download_stock_data() 內部的 get_history_cutoff_date() 已經會依照日曆日期
-    # 自動把歷史資料的上界往前推(週六退1天、週日退2天)，如果這裡又用日曆日期
-    # 的星期幾去判斷「今天/昨天」，等於兩層邏輯各退一次，會多退一天(這正是
-    # 「今天抓到8/7、昨收卻抓到8/5」這個 bug 的真正原因)。
-    # price_ref_date 是明確的「這個價格屬於哪個交易日」，用它的星期幾判斷才不會重複退位。
+    # 這裡改用 price_ref_date (呼叫端用 get_effective_trading_reference_date() 算出來，
+    # 直接複用 get_history_cutoff_date() 的星期幾規則：平日=今天、週六退1天、週日退2天)，
+    # 不要再用「呼叫當下的日曆日期」去猜。
+    # download_stock_data() 內部的 get_history_cutoff_date() 已經會依照同一套規則
+    # 把歷史資料的上界往前推，如果這裡又各自用日曆日期重新判斷一次「今天/昨天」，
+    # 等於兩層邏輯各退一次、會多退一天(這正是「今天抓到8/7、昨收卻抓到8/5」這個 bug
+    # 的真正原因)。現在兩處共用同一個 get_history_cutoff_date()，不會再各退一次。
     ref_date = price_ref_date if price_ref_date is not None else datetime.now(TW_TZ).date()
     today_ts = pd.Timestamp(ref_date)
     is_weekday = pd.Timestamp(ref_date).weekday() < 5
@@ -2568,11 +2563,10 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 raise ValueError("無法解析 yfinance 欄位格式")
             price, price_source = get_last_price(symbol, df, manager)
             stock_name = get_stock_name(symbol)
-            # 這個「即時價格」實際代表哪一個交易日？大部分情況下就是今天，
-            # 但 price_source 字串在「不是今天」時會明確帶出日期(見 get_last_price)，
-            # 解析出來後統一往下傳，讓 compute_indicators / run_stock_signals
-            # 對「今天是哪一天」的認知保持一致，不要各自用日曆日期猜。
-            price_ref_date = extract_price_reference_date(price_source, tw_now.date())
+            # 「今天應該視為哪個交易日」：平日就是今天；週六/週日一律往前推到最近的週五，
+            # 直接複用 download_stock_data() 內部也在用的 get_history_cutoff_date() 規則，
+            # 讓抓歷史資料/算昨收/跑訊號模組三處對「今天是哪一天」的認知永遠一致。
+            price_ref_date = get_effective_trading_reference_date(tw_now)
             # 優先使用富邦官方 REST 今日開高低價（100% 準確，交易所自己算好的）；
             # 失敗（未登入、非交易時段、觸發流量限制等）才 fallback 回自己
             # 用 WS 逐筆成交追蹤的 session_low / session_high，確保任何情況下都不會整頁掛掉。
