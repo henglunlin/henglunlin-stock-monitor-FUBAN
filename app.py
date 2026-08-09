@@ -1573,6 +1573,21 @@ def _prepare_signal_dataframe(df: pd.DataFrame, open_val: float, high_val: float
     """
     用歷史日K + 「今天」即時開高低收，組成 signal_module 需要的格式：
     index = Date字串、由舊到新排序，並附上 K/D/MA/Bias/BBand 等技術指標欄位。
+
+    重要修正 (2026-08)：
+    如果 df 裡「今天」已經有一筆真實的歷史K棒(例如 twse_ohlcv.db 已經同步到當天、
+    或收盤後重新整理頁面)，原本的寫法會把這筆真實資料整個丟掉，改用即時輪詢追蹤到的
+    session_high/session_low 蓋過去。但 session_high/session_low 是從「app 這次執行
+    開始輪詢後」才開始累積的，如果剛好是重新整理/重啟後的第一次輪詢，就只會等於
+    當下這一筆價格，導致「今天」這根K棒被誤建成開高低收全部相同的一字線，
+    完全遺失掉盤中真正出現過的高低點——這正是「明明沒跳空卻被誤判成立」的根本原因
+    (單跳空/雙跳空/島狀反轉/反向島狀 都是拿「今日 High/Low」跟「昨日 High/Low」比較，
+    只要「今日」的高低點被錯誤地壓縮成一個點，就很容易湊巧跟昨日的高低點產生假的跳空)。
+
+    修法：如果「今天」已經有真實歷史資料，改成跟即時追蹤到的高低「取聯集」
+    (今日最終 High = max(真實High, 即時追蹤High)，Low 同理取 min)，
+    確保真正出現過的當日高低點永遠不會被蓋掉；Close 則一律採用即時價，
+    盤中即時反映、收盤後也會等於當天實際收盤。
     """
     work = df.copy()
     if "Date" not in work.columns:
@@ -1584,7 +1599,17 @@ def _prepare_signal_dataframe(df: pd.DataFrame, open_val: float, high_val: float
 
     today_ts = pd.Timestamp(datetime.now(TW_TZ).date())
     if work["Date"].iloc[-1].normalize() == today_ts:
-        work = work.iloc[:-1]  # 避免資料源已含當日K時重複疊加
+        real_today = work.iloc[-1]
+        candidate_highs = [v for v in [real_today.get("High"), high_val] if pd.notna(v)]
+        candidate_lows = [v for v in [real_today.get("Low"), low_val] if pd.notna(v)]
+        real_open = real_today.get("Open")
+        if candidate_highs:
+            high_val = max(candidate_highs)
+        if candidate_lows:
+            low_val = min(candidate_lows)
+        if pd.notna(real_open):
+            open_val = real_open
+        work = work.iloc[:-1]  # 換成下面用聯集後的數值重建，避免重複疊加
 
     today_row = pd.DataFrame([{
         "Date": today_ts, "Open": open_val, "High": high_val, "Low": low_val, "Close": close_val, "Volume": 0,
