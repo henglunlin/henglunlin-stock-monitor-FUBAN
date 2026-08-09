@@ -1210,6 +1210,29 @@ def after_1330_price_logic(symbol, df, forced=False):
     raise ValueError("無法取得 13:30 後價格")
 
 
+def extract_price_reference_date(price_source: str, fallback_date):
+    """
+    大部分 price_source 字串在「這個價格不是真的今天」時會明確帶出日期，
+    例如 'TWSE DB（最新收盤 2026-08-07）'、'yfinance（最新收盤 2026-08-07）'。
+    這裡把這個日期解析出來，讓 compute_indicators() / _prepare_signal_dataframe()
+    知道「這個即時價格實際代表哪一天」，而不是一律假設等於呼叫當下的日曆日期。
+
+    這是一連串「明明沒跳空/沒跌停卻被誤判」bug的真正根源：週末/假日重新整理時，
+    「現在的日曆日期」(例如週日) 跟「這個價格實際代表的交易日」(例如上週五) 常常對不上，
+    之前的修法都還是在用日曆日期去猜，這裡改成直接讀取 price_source 裡已經有的真實日期，
+    不用再猜。找不到明確日期時 (例如 "Fubon WebSocket trades" 這種盤中即時來源，
+    本來就代表今天)，才退回原本傳入的 fallback_date。
+    """
+    if price_source:
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", str(price_source))
+        if m:
+            try:
+                return datetime.strptime(m.group(1), "%Y-%m-%d").date()
+            except Exception:
+                pass
+    return fallback_date
+
+
 def get_last_price(symbol, df, manager=None):
     if st.session_state.get("post_market_enabled", False):
         source = st.session_state.get("post_market_source", "db")
@@ -1449,7 +1472,7 @@ def update_intraday_high(symbol: str, price_val: float, now_dt, price_source: st
 # =============================================================================
 # 指標計算
 # =============================================================================
-def compute_indicators(df, price):
+def compute_indicators(df, price, price_ref_date=None):
     if df is None or df.empty:
         raise ValueError("下載資料為空")
     if len(df) < 20:
@@ -1465,14 +1488,19 @@ def compute_indicators(df, price):
     # 「昨收」判斷邏輯，必須跟 _prepare_signal_dataframe() 保持一致，
     # 否則兩邊對「今天是哪一天」認知不同，會導致畫面顯示的「昨收/漲跌%」
     # 跟訊號模組(單跳空/雙跳空/島狀反轉/反向島狀/跌停/漲停...等)實際判斷用的
-    # 基準日對不起來——這正是「畫面顯示 -7.47% 卻被判定跌停」的根本原因：
-    # 原本這裡無條件假設 df 最後一筆永遠是「昨天」(close.iloc[-1])，
-    # 但週末/假日重新整理時，_prepare_signal_dataframe() 已經改成把 df 最後一筆
-    # 當成「今天/最近一個交易日」處理，這裡卻還在用「倒數第一筆」當昨收，
-    # 兩邊就對不起來了。
-    now_dt = datetime.now(TW_TZ)
-    today_ts = pd.Timestamp(now_dt.date())
-    is_weekday = now_dt.weekday() < 5
+    # 基準日對不起來。
+    #
+    # 這裡改用 price_ref_date (從 price_source 字串解析出來的「這個價格實際代表哪一天」，
+    # 見 extract_price_reference_date())，不要再用「呼叫當下的日曆日期」去猜。
+    # 日曆日期在週末/假日重新整理時完全沒有意義(週日不是交易日)，而且
+    # download_stock_data() 內部的 get_history_cutoff_date() 已經會依照日曆日期
+    # 自動把歷史資料的上界往前推(週六退1天、週日退2天)，如果這裡又用日曆日期
+    # 的星期幾去判斷「今天/昨天」，等於兩層邏輯各退一次，會多退一天(這正是
+    # 「今天抓到8/7、昨收卻抓到8/5」這個 bug 的真正原因)。
+    # price_ref_date 是明確的「這個價格屬於哪個交易日」，用它的星期幾判斷才不會重複退位。
+    ref_date = price_ref_date if price_ref_date is not None else datetime.now(TW_TZ).date()
+    today_ts = pd.Timestamp(ref_date)
+    is_weekday = pd.Timestamp(ref_date).weekday() < 5
 
     last_date = None
     if "Date" in calc_df.columns:
@@ -1481,8 +1509,9 @@ def compute_indicators(df, price):
             last_date = parsed_dates.iloc[-1].normalize()
 
     # 判斷規則跟 _prepare_signal_dataframe() 的 should_merge_into_last_row 完全一致：
-    # 平日且資料庫最後一筆就是今天、或現在不是平日(週末) -> 最後一筆要被當成「今天/最近交易日」，
-    # 真正的昨收要往前一筆拿；只有平日且資料庫還沒有今天(單純盤中情境)，最後一筆才是「昨天」。
+    # ref_date 對應的交易日是平日、且歷史資料最後一筆剛好就是 ref_date -> 這筆要當「今天」，
+    # 真正的昨收要往前一筆拿；ref_date 不是平日(理論上不該發生，因為它應該永遠是個真實交易日)
+    # 也視為同一種情況；只有歷史資料還沒有 ref_date 這一天(單純盤中情境)，最後一筆才是「昨天」。
     treat_last_row_as_today = (last_date is not None and last_date == today_ts) or (not is_weekday)
 
     if treat_last_row_as_today:
@@ -1499,7 +1528,7 @@ def compute_indicators(df, price):
     change_pct = float((price_val / yesterday_close - 1) * 100)
 
     today_row = pd.DataFrame([{
-        "Date": pd.Timestamp(datetime.now(TW_TZ).date()),
+        "Date": today_ts,
         "Open": price_val,
         "High": price_val,
         "Low": price_val,
@@ -1598,33 +1627,27 @@ def get_signal_registry():
     return SIGNAL_REGISTRY
 
 
-def _prepare_signal_dataframe(df: pd.DataFrame, open_val: float, high_val: float, low_val: float, close_val: float) -> pd.DataFrame:
+def _prepare_signal_dataframe(df: pd.DataFrame, open_val: float, high_val: float, low_val: float, close_val: float, price_ref_date=None) -> pd.DataFrame:
     """
     用歷史日K + 「今天」即時開高低收，組成 signal_module 需要的格式：
     index = Date字串、由舊到新排序，並附上 K/D/MA/Bias/BBand 等技術指標欄位。
 
-    重要修正 (2026-08，第二版)：
-    第一版的問題：只有在「資料庫最後一筆的日期」跟「今天的日曆日期」完全相等時，
-    才會把即時追蹤到的高低跟真實資料取聯集；一旦遇到週末/假日重新整理頁面
-    (例如今天週日、資料庫最後一筆是上週五)，這個條件永遠不成立，
-    程式就會退回舊行為：無中生有造一根「週日」的K棒(開高低收全部等於同一個即時價，
-    因為週末沒開盤、輪詢到的價格通常就是停在最後收盤價)，疊在真實資料後面，
-    然後訊號模組就會拿這根假的一字線去跟真實的前一交易日比較，一樣會產生誤判。
+    重要修正 (2026-08，第三版)：
+    第一、二版都還是用「呼叫當下的日曆日期」猜「今天是哪一天」，但這個猜測本身就有問題：
+    - download_stock_data() 內部的 get_history_cutoff_date() 已經會依照日曆日期的星期幾，
+      自動把「歷史資料」的上界往前推 (週六退1天、週日退2天)，讓最新一個交易日改由
+      即時價格代表。
+    - 如果這裡又用日曆日期的星期幾去判斷「該不該多退一天」，等於兩層邏輯各退一次，
+      會多退了一天 (例如今天週日、最新交易日其實是週五，結果「昨收」卻抓到週四之前)。
 
-    真正需要判斷的不是「日期是否等於今天」，而是「現在是不是一個可能有新交易日
-    尚未同步進資料庫的平日」。所以改成：
-      - 如果「現在」是平日(週一~週五)，且資料庫最後一筆的日期就是今天
-        → 今天已經有真實資料，跟即時值取聯集(維持第一版的修正)。
-      - 如果「現在」不是平日(週六/週日)，或資料庫最後一筆本來就還不是「今天」
-        但也還沒到「新的交易日」該登場的時候 → 不要無中生有造新的一天，
-        直接把即時值併入資料庫「最後一個交易日」那一筆，沿用該筆的真實日期繼續當
-        scan_date(而不是用假的週末日期)。
-      - 只有「平日」且資料庫最後一筆日期還停留在更早之前(代表今天這個交易日
-        還沒同步進資料庫，這是真正的盤中情境) → 才新增一筆「今天」。
+    改用 price_ref_date：這是從 get_last_price() 回傳的 price_source 字串裡解析出來的
+    「這個即時價格實際代表哪一個交易日」(例如 'TWSE DB（最新收盤 2026-08-07）' 解析出
+    2026-08-07)，不再靠日曆日期用猜的。判斷規則不變 (平日/週末 + 資料庫最後一筆日期)，
+    只是「今天」跟「是不是平日」都改成以 price_ref_date 為準。
 
-    ⚠️ 已知限制：目前只用「是否為週六/週日」判斷是否為交易日，沒有內建台股國定假日
-    行事曆。如果「今天」剛好是平日的國定假日(股市休市)，還是可能會誤判成「新交易日」
-    而多出一根假的一字線K棒。如果需要完全避免，之後可以另外維護一份台股休市日期清單。
+    ⚠️ 已知限制：如果 price_source 字串完全沒有帶日期(例如即時盤中來源本來就代表當下)，
+    會退回用呼叫當下的日曆日期；另外也沒有內建台股國定假日行事曆，平日的國定假日
+    仍可能被誤判成新交易日。
     """
     work = df.copy()
     if "Date" not in work.columns:
@@ -1634,9 +1657,9 @@ def _prepare_signal_dataframe(df: pd.DataFrame, open_val: float, high_val: float
     if work.empty:
         raise ValueError("下載資料為空")
 
-    now_dt = datetime.now(TW_TZ)
-    today_ts = pd.Timestamp(now_dt.date())
-    is_weekday = now_dt.weekday() < 5  # 0=一 ... 4=五, 5=六, 6=日
+    ref_date = price_ref_date if price_ref_date is not None else datetime.now(TW_TZ).date()
+    today_ts = pd.Timestamp(ref_date)
+    is_weekday = pd.Timestamp(ref_date).weekday() < 5  # 0=一 ... 4=五, 5=六, 6=日
     last_date = work["Date"].iloc[-1].normalize()
 
     should_merge_into_last_row = (last_date == today_ts) or (not is_weekday)
@@ -1653,9 +1676,11 @@ def _prepare_signal_dataframe(df: pd.DataFrame, open_val: float, high_val: float
         merged_open = real_open if pd.notna(real_open) else open_val
 
         work = work.iloc[:-1]
-        today_ts = real_date  # 沿用資料庫裡「真實」的交易日日期，不要用假的週末/日曆日期
+        today_ts = real_date  # 沿用資料庫裡「真實」的交易日日期
         open_val, high_val, low_val = merged_open, merged_high, merged_low
         # close_val 維持傳入的即時價：盤中即時反映，非交易時間通常就等於當天實際收盤，不受影響。
+    else:
+        today_ts = pd.Timestamp(ref_date)  # 平日盤中、資料庫還沒有這一天 -> 用真實交易日日期新增
 
     today_row = pd.DataFrame([{
         "Date": today_ts, "Open": open_val, "High": high_val, "Low": low_val, "Close": close_val, "Volume": 0,
@@ -1668,7 +1693,7 @@ def _prepare_signal_dataframe(df: pd.DataFrame, open_val: float, high_val: float
     return work
 
 
-def run_stock_signals(symbol, name, df, open_val, high_val, low_val, close_val, rise_threshold=5.0):
+def run_stock_signals(symbol, name, df, open_val, high_val, low_val, close_val, rise_threshold=5.0, price_ref_date=None):
     """
     對單一股票跑過全部已註冊訊號。
     回傳 (hit_list, display_text)：
@@ -1677,7 +1702,7 @@ def run_stock_signals(symbol, name, df, open_val, high_val, low_val, close_val, 
                      （數字越小越重要；同一天同等級的訊號一起觸發就一起顯示）
     """
     try:
-        df_ind = _prepare_signal_dataframe(df, open_val, high_val, low_val, close_val)
+        df_ind = _prepare_signal_dataframe(df, open_val, high_val, low_val, close_val, price_ref_date=price_ref_date)
     except Exception:
         return [], "-"
 
@@ -2543,6 +2568,11 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 raise ValueError("無法解析 yfinance 欄位格式")
             price, price_source = get_last_price(symbol, df, manager)
             stock_name = get_stock_name(symbol)
+            # 這個「即時價格」實際代表哪一個交易日？大部分情況下就是今天，
+            # 但 price_source 字串在「不是今天」時會明確帶出日期(見 get_last_price)，
+            # 解析出來後統一往下傳，讓 compute_indicators / run_stock_signals
+            # 對「今天是哪一天」的認知保持一致，不要各自用日曆日期猜。
+            price_ref_date = extract_price_reference_date(price_source, tw_now.date())
             # 優先使用富邦官方 REST 今日開高低價（100% 準確，交易所自己算好的）；
             # 失敗（未登入、非交易時段、觸發流量限制等）才 fallback 回自己
             # 用 WS 逐筆成交追蹤的 session_low / session_high，確保任何情況下都不會整頁掛掉。
@@ -2557,7 +2587,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 session_high = update_intraday_high(symbol, price, tw_now, price_source)
             session_open = official_ohlc.get("open") if official_ohlc.get("open") is not None else price
 
-            data = compute_indicators(df, price)
+            data = compute_indicators(df, price, price_ref_date=price_ref_date)
             signal_hits, signal_display = run_stock_signals(
                 symbol, stock_name, df,
                 open_val=session_open,
@@ -2565,6 +2595,7 @@ for group_name, stocks in st.session_state.stock_groups.items():
                 low_val=min(session_low, price),
                 close_val=price,
                 rise_threshold=rise_threshold,
+                price_ref_date=price_ref_date,
             )
 
             is_high_gain = data["pct"] >= 5
