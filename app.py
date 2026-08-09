@@ -1462,7 +1462,36 @@ def compute_indicators(df, price):
     if close.isna().all() or low.isna().all() or high.isna().all():
         raise ValueError("OHLC 資料格式異常")
 
-    yesterday_close = float(close.iloc[-1])
+    # 「昨收」判斷邏輯，必須跟 _prepare_signal_dataframe() 保持一致，
+    # 否則兩邊對「今天是哪一天」認知不同，會導致畫面顯示的「昨收/漲跌%」
+    # 跟訊號模組(單跳空/雙跳空/島狀反轉/反向島狀/跌停/漲停...等)實際判斷用的
+    # 基準日對不起來——這正是「畫面顯示 -7.47% 卻被判定跌停」的根本原因：
+    # 原本這裡無條件假設 df 最後一筆永遠是「昨天」(close.iloc[-1])，
+    # 但週末/假日重新整理時，_prepare_signal_dataframe() 已經改成把 df 最後一筆
+    # 當成「今天/最近一個交易日」處理，這裡卻還在用「倒數第一筆」當昨收，
+    # 兩邊就對不起來了。
+    now_dt = datetime.now(TW_TZ)
+    today_ts = pd.Timestamp(now_dt.date())
+    is_weekday = now_dt.weekday() < 5
+
+    last_date = None
+    if "Date" in calc_df.columns:
+        parsed_dates = pd.to_datetime(calc_df["Date"], errors="coerce")
+        if parsed_dates.notna().any():
+            last_date = parsed_dates.iloc[-1].normalize()
+
+    # 判斷規則跟 _prepare_signal_dataframe() 的 should_merge_into_last_row 完全一致：
+    # 平日且資料庫最後一筆就是今天、或現在不是平日(週末) -> 最後一筆要被當成「今天/最近交易日」，
+    # 真正的昨收要往前一筆拿；只有平日且資料庫還沒有今天(單純盤中情境)，最後一筆才是「昨天」。
+    treat_last_row_as_today = (last_date is not None and last_date == today_ts) or (not is_weekday)
+
+    if treat_last_row_as_today:
+        if len(close.dropna()) < 2:
+            raise ValueError("資料筆數不足，無法取得昨收")
+        yesterday_close = float(close.iloc[-2])
+    else:
+        yesterday_close = float(close.iloc[-1])
+
     if pd.isna(yesterday_close) or yesterday_close == 0:
         raise ValueError("昨收資料異常")
 
