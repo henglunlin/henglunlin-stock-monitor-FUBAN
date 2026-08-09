@@ -1019,6 +1019,49 @@ def get_db_latest_price(symbol: str):
     return float(close), str(date_str)
 
 
+@st.cache_data(ttl=DB_LATEST_PRICE_CACHE_TTL_SEC)
+def get_db_ohlc_for_date(symbol: str, target_date_str: str) -> dict:
+    """
+    直接從 twse_ohlcv.db 撈出「特定日期」那一天完整的真實開高低收，
+    不受 get_history_cutoff_date() 的上界限制(那個限制只是用來決定「歷史資料」
+    要不要包含這天，不代表這天的真實資料不存在於資料庫裡)。
+
+    用途：在「TWSE DB」這種非即時來源(收盤後查詢、或週末/假日重新整理)的情況下，
+    get_last_price() 拿到的價格是固定不變的歷史收盤價，每次輪詢都一樣。
+    如果拿這種「不會變」的價格去跑 update_intraday_low()/update_intraday_high()
+    這種本來是為了「即時逐筆追蹤」設計的 session 累積邏輯，只會追蹤到一條扁平的死線
+    (因為 min/max 一個常數序列，結果就是那個常數本身)，完全遺失掉當天真正的高低點。
+    既然資料庫裡其實已經有這天完整的真實 OHLC，直接查表拿最準，
+    不要再依賴為即時情境設計的 session 追蹤機制。
+    """
+    result = {"open": None, "high": None, "low": None}
+    if not os.path.exists(TWSE_DB_PATH):
+        return result
+    try:
+        code = symbol_to_code(symbol)
+        market = symbol_to_db_market(symbol)
+        conn = sqlite3.connect(TWSE_DB_PATH)
+        try:
+            row = conn.execute(
+                "SELECT Open, High, Low FROM ohlcv_data "
+                "WHERE SecurityCode = ? AND Market = ? AND Date = ?",
+                (code, market, target_date_str),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row:
+            o, h, l = row
+            def _to_float(v):
+                try:
+                    return float(v) if v is not None else None
+                except Exception:
+                    return None
+            result = {"open": _to_float(o), "high": _to_float(h), "low": _to_float(l)}
+    except Exception:
+        pass
+    return result
+
+
 def download_stock_data(symbol):
     today_str = datetime.now(TW_TZ).strftime("%Y-%m-%d")
 
@@ -2568,9 +2611,16 @@ for group_name, stocks in st.session_state.stock_groups.items():
             # 讓抓歷史資料/算昨收/跑訊號模組三處對「今天是哪一天」的認知永遠一致。
             price_ref_date = get_effective_trading_reference_date(tw_now)
             # 優先使用富邦官方 REST 今日開高低價（100% 準確，交易所自己算好的）；
-            # 失敗（未登入、非交易時段、觸發流量限制等）才 fallback 回自己
-            # 用 WS 逐筆成交追蹤的 session_low / session_high，確保任何情況下都不會整頁掛掉。
+            # 第二順位改查本地資料庫「price_ref_date 那一天」的真實開高低
+            # (解決 TWSE DB / 非即時來源時，價格是固定值、session追蹤會失真的問題)；
+            # 最後才 fallback 回自己用 WS 逐筆成交追蹤的 session_low / session_high，
+            # 確保任何情況下都不會整頁掛掉。
             official_ohlc = get_official_today_ohlc(manager, symbol)
+            if official_ohlc.get("open") is None or official_ohlc.get("high") is None or official_ohlc.get("low") is None:
+                db_ohlc = get_db_ohlc_for_date(symbol, price_ref_date.strftime("%Y-%m-%d"))
+                for _k in ("open", "high", "low"):
+                    if official_ohlc.get(_k) is None and db_ohlc.get(_k) is not None:
+                        official_ohlc[_k] = db_ohlc[_k]
             if official_ohlc.get("low") is not None:
                 session_low = official_ohlc["low"]
             else:
