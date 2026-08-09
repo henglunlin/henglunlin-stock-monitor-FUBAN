@@ -1574,20 +1574,28 @@ def _prepare_signal_dataframe(df: pd.DataFrame, open_val: float, high_val: float
     用歷史日K + 「今天」即時開高低收，組成 signal_module 需要的格式：
     index = Date字串、由舊到新排序，並附上 K/D/MA/Bias/BBand 等技術指標欄位。
 
-    重要修正 (2026-08)：
-    如果 df 裡「今天」已經有一筆真實的歷史K棒(例如 twse_ohlcv.db 已經同步到當天、
-    或收盤後重新整理頁面)，原本的寫法會把這筆真實資料整個丟掉，改用即時輪詢追蹤到的
-    session_high/session_low 蓋過去。但 session_high/session_low 是從「app 這次執行
-    開始輪詢後」才開始累積的，如果剛好是重新整理/重啟後的第一次輪詢，就只會等於
-    當下這一筆價格，導致「今天」這根K棒被誤建成開高低收全部相同的一字線，
-    完全遺失掉盤中真正出現過的高低點——這正是「明明沒跳空卻被誤判成立」的根本原因
-    (單跳空/雙跳空/島狀反轉/反向島狀 都是拿「今日 High/Low」跟「昨日 High/Low」比較，
-    只要「今日」的高低點被錯誤地壓縮成一個點，就很容易湊巧跟昨日的高低點產生假的跳空)。
+    重要修正 (2026-08，第二版)：
+    第一版的問題：只有在「資料庫最後一筆的日期」跟「今天的日曆日期」完全相等時，
+    才會把即時追蹤到的高低跟真實資料取聯集；一旦遇到週末/假日重新整理頁面
+    (例如今天週日、資料庫最後一筆是上週五)，這個條件永遠不成立，
+    程式就會退回舊行為：無中生有造一根「週日」的K棒(開高低收全部等於同一個即時價，
+    因為週末沒開盤、輪詢到的價格通常就是停在最後收盤價)，疊在真實資料後面，
+    然後訊號模組就會拿這根假的一字線去跟真實的前一交易日比較，一樣會產生誤判。
 
-    修法：如果「今天」已經有真實歷史資料，改成跟即時追蹤到的高低「取聯集」
-    (今日最終 High = max(真實High, 即時追蹤High)，Low 同理取 min)，
-    確保真正出現過的當日高低點永遠不會被蓋掉；Close 則一律採用即時價，
-    盤中即時反映、收盤後也會等於當天實際收盤。
+    真正需要判斷的不是「日期是否等於今天」，而是「現在是不是一個可能有新交易日
+    尚未同步進資料庫的平日」。所以改成：
+      - 如果「現在」是平日(週一~週五)，且資料庫最後一筆的日期就是今天
+        → 今天已經有真實資料，跟即時值取聯集(維持第一版的修正)。
+      - 如果「現在」不是平日(週六/週日)，或資料庫最後一筆本來就還不是「今天」
+        但也還沒到「新的交易日」該登場的時候 → 不要無中生有造新的一天，
+        直接把即時值併入資料庫「最後一個交易日」那一筆，沿用該筆的真實日期繼續當
+        scan_date(而不是用假的週末日期)。
+      - 只有「平日」且資料庫最後一筆日期還停留在更早之前(代表今天這個交易日
+        還沒同步進資料庫，這是真正的盤中情境) → 才新增一筆「今天」。
+
+    ⚠️ 已知限制：目前只用「是否為週六/週日」判斷是否為交易日，沒有內建台股國定假日
+    行事曆。如果「今天」剛好是平日的國定假日(股市休市)，還是可能會誤判成「新交易日」
+    而多出一根假的一字線K棒。如果需要完全避免，之後可以另外維護一份台股休市日期清單。
     """
     work = df.copy()
     if "Date" not in work.columns:
@@ -1597,19 +1605,28 @@ def _prepare_signal_dataframe(df: pd.DataFrame, open_val: float, high_val: float
     if work.empty:
         raise ValueError("下載資料為空")
 
-    today_ts = pd.Timestamp(datetime.now(TW_TZ).date())
-    if work["Date"].iloc[-1].normalize() == today_ts:
+    now_dt = datetime.now(TW_TZ)
+    today_ts = pd.Timestamp(now_dt.date())
+    is_weekday = now_dt.weekday() < 5  # 0=一 ... 4=五, 5=六, 6=日
+    last_date = work["Date"].iloc[-1].normalize()
+
+    should_merge_into_last_row = (last_date == today_ts) or (not is_weekday)
+
+    if should_merge_into_last_row:
         real_today = work.iloc[-1]
+        real_date = work["Date"].iloc[-1]
         candidate_highs = [v for v in [real_today.get("High"), high_val] if pd.notna(v)]
         candidate_lows = [v for v in [real_today.get("Low"), low_val] if pd.notna(v)]
         real_open = real_today.get("Open")
-        if candidate_highs:
-            high_val = max(candidate_highs)
-        if candidate_lows:
-            low_val = min(candidate_lows)
-        if pd.notna(real_open):
-            open_val = real_open
-        work = work.iloc[:-1]  # 換成下面用聯集後的數值重建，避免重複疊加
+
+        merged_high = max(candidate_highs) if candidate_highs else high_val
+        merged_low = min(candidate_lows) if candidate_lows else low_val
+        merged_open = real_open if pd.notna(real_open) else open_val
+
+        work = work.iloc[:-1]
+        today_ts = real_date  # 沿用資料庫裡「真實」的交易日日期，不要用假的週末/日曆日期
+        open_val, high_val, low_val = merged_open, merged_high, merged_low
+        # close_val 維持傳入的即時價：盤中即時反映，非交易時間通常就等於當天實際收盤，不受影響。
 
     today_row = pd.DataFrame([{
         "Date": today_ts, "Open": open_val, "High": high_val, "Low": low_val, "Close": close_val, "Volume": 0,
