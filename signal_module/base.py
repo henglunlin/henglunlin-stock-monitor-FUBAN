@@ -33,6 +33,11 @@ class SignalResult:
     hit: bool                          # 是否觸發訊號
     detail: str = ""                   # 說明文字
     marks: list = field(default_factory=list)   # 需要在圖上標記的日期清單 (YYYY-MM-DD)
+    sub_label: str = ""                # 選用: 動態附加在訊號名稱後面的短字串 (例如 "(短期)")，
+                                        # 用於「同一個訊號、但這次觸發的細分類會變動」的情況
+                                        # (例如下降趨勢線突破依觸發當下區分短期/中短期/中長期)，
+                                        # 讓「訊號類型」欄位不用因此拆成好幾個獨立註冊的訊號。
+                                        # 大多數訊號不需要設定這個欄位，維持預設空字串即可。
 
 
 def register_signal(key: str, label: str, description: str = "", kind: str = "buy"):

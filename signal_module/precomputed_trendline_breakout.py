@@ -145,6 +145,14 @@ def check_precomputed_trendline_breakout(ctx: SignalContext) -> SignalResult:
     if hit_tiers:
         summary = "、".join(hit_tiers)
         detail = f"{ctx.scan_date} 突破下降趨勢線：{summary}\n" + "\n".join(detail_lines)
-        return SignalResult(hit=True, detail=detail, marks=[ctx.scan_date], sub_label=f"({summary})")
+        try:
+            return SignalResult(hit=True, detail=detail, marks=[ctx.scan_date], sub_label=f"({summary})")
+        except TypeError:
+            # signal_module/base.py 裡的 SignalResult 還沒有 sub_label 這個欄位
+            # (需要更新成有支援 sub_label 的版本，才能在「訊號類型」欄位自動標示
+            # 是短期/中短期/中長期)。這裡優雅退回不帶 sub_label 的版本，
+            # 至少訊號還是會正確觸發、正確顯示成立，只是暫時不會自動標示等級——
+            # 等級資訊仍然完整寫在上面的 detail 文字裡，不會遺失。
+            return SignalResult(hit=True, detail=detail, marks=[ctx.scan_date])
 
     return SignalResult(hit=False, detail="\n".join(detail_lines))
