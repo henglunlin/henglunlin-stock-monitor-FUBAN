@@ -522,6 +522,62 @@ def get_official_today_ohlc(manager, symbol: str) -> dict:
         return {"open": None, "high": None, "low": None}
 
 
+def render_signal_debug_panel():
+    """
+    🔍 訊號偵錯：輸入一檔股票代碼，直接顯示「全部17個訊號」的判定結果(hit + 完整說明文字)，
+    不管有沒有觸發都會列出來 —— 平常畫面上的「買賣訊號」欄位只會顯示有觸發、
+    而且優先等級最高的那幾個，看不到「為什麼沒觸發」的原因；這裡直接把
+    SignalResult.detail 攤開來看，方便排查「明明應該觸發卻沒出現」這種問題。
+    用的是目前這次刷新當下的即時資料，跟主掃描迴圈完全同一套邏輯，不是另外模擬的。
+    """
+    with st.sidebar.expander("🔍 訊號偵錯（單檔股票細節）", expanded=False):
+        st.caption("查某檔股票「全部訊號」目前的判定結果與完整說明文字，不受優先等級篩選影響。")
+        debug_symbol = st.text_input("股票代碼 (例如 3711.TW)", key="debug_signal_symbol_input")
+        if st.button("查詢", key="debug_signal_query_btn", use_container_width=True) and debug_symbol.strip():
+            symbol = debug_symbol.strip().upper()
+            try:
+                manager = st.session_state.get("fubon_manager")
+                raw_df = download_stock_data(symbol)
+                df = normalize_ohlc(raw_df)
+                if df.empty:
+                    st.error("無法解析資料 (normalize_ohlc 後為空)")
+                else:
+                    price, price_source = get_last_price(symbol, df, manager)
+                    price_ref_date = get_effective_trading_reference_date(datetime.now(TW_TZ))
+                    st.write(f"**目前價格**：{price}　**來源**：{price_source}")
+                    st.write(f"**判定的交易日 (price_ref_date)**：{price_ref_date}")
+
+                    official_ohlc = get_official_today_ohlc(manager, symbol)
+                    if official_ohlc.get("open") is None or official_ohlc.get("high") is None or official_ohlc.get("low") is None:
+                        db_ohlc = get_db_ohlc_for_date(symbol, price_ref_date.strftime("%Y-%m-%d"))
+                        for _k in ("open", "high", "low"):
+                            if official_ohlc.get(_k) is None and db_ohlc.get(_k) is not None:
+                                official_ohlc[_k] = db_ohlc[_k]
+                    open_val = official_ohlc.get("open") if official_ohlc.get("open") is not None else price
+                    high_val = max(official_ohlc.get("high") if official_ohlc.get("high") is not None else price, price)
+                    low_val = min(official_ohlc.get("low") if official_ohlc.get("low") is not None else price, price)
+                    st.write(f"**開高低收**：開{open_val} 高{high_val} 低{low_val} 收{price}")
+
+                    df_ind = _prepare_signal_dataframe(df, open_val, high_val, low_val, price, price_ref_date=price_ref_date)
+                    scan_date = df_ind.index[-1]
+                    st.write(f"**訊號模組用的 scan_date**：{scan_date}")
+
+                    ctx = ModuleSignalContext(
+                        code=symbol, name=symbol, df=df_ind, scan_date=scan_date,
+                        params={"rise_threshold": globals().get("rise_threshold", 5.0)},
+                    )
+                    rows = []
+                    for key, cfg in SIGNAL_REGISTRY.items():
+                        try:
+                            result = cfg["func"](ctx)
+                            rows.append({"訊號": cfg["label"], "hit": result.hit, "說明": result.detail})
+                        except Exception as e:
+                            rows.append({"訊號": cfg["label"], "hit": "錯誤", "說明": f"{type(e).__name__}: {e}"})
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            except Exception as e:
+                st.error(f"查詢失敗：{type(e).__name__}: {e}")
+
+
 def render_taiex_chart():
     st.markdown("#### 📈 台股加權指數（TSE）即時走勢")
 
@@ -2503,6 +2559,7 @@ with st.sidebar.expander("📊 資料來源設定", expanded=True):
             st.error(f"找不到資料庫檔案：{TWSE_DB_PATH}")
 
 render_fubon_login()
+render_signal_debug_panel()
 render_group_editor_lock()
 if st.session_state.group_editor_unlocked:
     render_stock_group_editor()
