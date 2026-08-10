@@ -53,6 +53,36 @@ def _load_levels():
     return data
 
 
+def _lookup_symbol_levels(levels: dict, code: str):
+    """
+    用股票代碼查 levels 字典，容忍「有沒有帶 .TW/.TWO 後綴」的格式差異。
+    正常情況下 ctx.code 應該跟 JSON 裡的 key 格式完全一致(例如都是 "3711.TW")，
+    但為了避免任何一邊的代碼格式稍有出入(例如少打了後綴、大小寫不同)就整個查不到，
+    這裡多做幾層寬鬆比對:
+      1. 完全相同的 key，直接命中(最常見、最快)。
+      2. 忽略大小寫比對一次。
+      3. 如果還是找不到，改用「去掉 .TW/.TWO 後綴的純代碼」去比對 levels 裡每一個 key，
+         只要純代碼相同就視為同一檔股票。
+    """
+    if not levels or not code:
+        return None
+
+    if code in levels:
+        return levels[code]
+
+    code_upper = str(code).strip().upper()
+    for key, value in levels.items():
+        if str(key).strip().upper() == code_upper:
+            return value
+
+    bare_code = code_upper.split(".")[0]
+    for key, value in levels.items():
+        if str(key).strip().upper().split(".")[0] == bare_code:
+            return value
+
+    return None
+
+
 @register_signal(
     key="precomputed_trendline_breakout",
     label="下降趨勢線突破",
@@ -81,7 +111,7 @@ def check_precomputed_trendline_breakout(ctx: SignalContext) -> SignalResult:
             ),
         )
 
-    symbol_levels = (levels_data.get("levels") or {}).get(ctx.code)
+    symbol_levels = _lookup_symbol_levels(levels_data.get("levels") or {}, ctx.code)
     if not symbol_levels:
         return SignalResult(hit=False, detail=f"{ctx.code} 沒有預先計算好的下降趨勢線資料")
 
