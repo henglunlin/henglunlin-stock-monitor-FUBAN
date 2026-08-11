@@ -1717,6 +1717,10 @@ SIGNAL_PRIORITY = {
 }
 SIGNAL_PRIORITY_DEFAULT = 3
 
+# 廣義上升三法 / 廣義下降三法：這兩種型態訊號雜訊較多，單獨出現時不觸發 Telegram 推播；
+# 但只要「同時」有其他訊號一起命中（例如 廣義上升三法 + 巧妙點），就視為有效訊號、一併推送。
+GENERALIZED_THREE_METHOD_LABELS = {"廣義上升三法", "廣義下降三法"}
+
 
 def get_signal_registry():
     return SIGNAL_REGISTRY
@@ -2701,7 +2705,10 @@ for group_name, stocks in st.session_state.stock_groups.items():
             )
 
             is_high_gain = data["pct"] >= 5
-            has_priority_signal = bool(signal_hits)
+            # 過濾規則：如果命中的訊號「只有」廣義上升三法 / 廣義下降三法，不算數（不觸發推播）；
+            # 只要還有其他訊號一起命中，就照樣算數，一併推送。
+            pushable_signal_hits = [h for h in signal_hits if h["label"] not in GENERALIZED_THREE_METHOD_LABELS]
+            has_priority_signal = bool(pushable_signal_hits)
             if is_high_gain or has_priority_signal:
                 base_symbol = symbol.split('.')[0]
                 yahoo_url = f"https://tw.stock.yahoo.com/quote/{base_symbol}"
