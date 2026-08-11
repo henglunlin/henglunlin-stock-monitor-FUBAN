@@ -9,11 +9,19 @@ GitHub Actions 排程每天更新。
 盤中掃描時只需要拿「目前價格」跟這個預先算好的數字比較即可，
 不用每次刷新都重新跑一次上緣凸包演算法，大幅減少盤中運算量。
 
+額外條件 (2026-08-10 新增):
+    突破當日還必須「收盤漲幅 >= MIN_PCT_GAIN(預設2.5%)」才算數，只是突破預算價位
+    但漲幅不夠的情況不會觸發訊號(detail 裡仍會記錄突破了、只是漲幅不足)。
+    這個門檻是手動指定的經驗值，不是本次進場指標濾網優化分析回測驗證過的結果——
+    如果之後想確認2.5%是不是最佳切點，可以比照該次分析的 walk-forward 流程，
+    對這個訊號額外做一次數值化門檻掃描。
+
 安全機制:
     - 找不到 trendline_levels.json 時，一律視為不成立 (不會噴錯，也不會亂猜)。
     - 檔案裡的 target_date 對不上「今天」時 (可能排程還沒跑、今天沒開盤、
       或忘了更新)，一律視為不成立，不會誤用到舊資料。
-    - 這兩種情況的原因都會寫進 detail，方便排查。
+    - 沒有前一交易日資料、無法計算漲幅時，一律視為不成立(不會誤判漲幅達標)。
+    - 這些情況的原因都會寫進 detail，方便排查。
 
 依存檔案:
     - repo 根目錄 trendline_levels.json (由 precompute_trendlines.py 產生並提交)
@@ -28,6 +36,11 @@ LEVELS_FILE = os.path.join(
 )
 
 TIER_LABELS = [("short", "短期"), ("mid", "中短期"), ("long", "中長期")]
+
+# 額外條件：當日漲幅至少要達到這個百分比，才算數(用今日收盤 vs 前一交易日收盤計算)。
+# 這個門檻是使用者手動指定，不是本次回測濾網分析驗證過的結果，之後若要調整可回頭
+# 用同一套 walk-forward 流程驗證看看不同門檻值的效果。
+MIN_PCT_GAIN = 2.5
 
 # 簡單的檔案內容快取: 只有在檔案的修改時間變了才重新讀取，
 # 避免同一次掃描(可能上百檔股票)每一檔都重新開一次檔案、重新解析一次 JSON。
@@ -117,8 +130,23 @@ def check_precomputed_trendline_breakout(ctx: SignalContext) -> SignalResult:
 
     today_close = float(df.loc[ctx.scan_date, "Close"])
 
+    # 計算當日漲幅 (今日收盤 vs 前一交易日收盤)，用來套用「漲幅至少2.5%」的門檻
+    scan_idx = dates.index(ctx.scan_date)
+    if scan_idx == 0:
+        pct_gain = None  # 沒有前一交易日資料，無法計算漲幅
+    else:
+        prev_close = float(df.loc[dates[scan_idx - 1], "Close"])
+        pct_gain = (today_close - prev_close) / prev_close * 100 if prev_close else None
+
+    if pct_gain is None:
+        gain_ok = False
+        gain_note = "漲幅無法計算(無前一交易日收盤資料)"
+    else:
+        gain_ok = pct_gain >= MIN_PCT_GAIN
+        gain_note = f"今日漲幅{pct_gain:+.2f}% {'✅達標' if gain_ok else f'未達{MIN_PCT_GAIN}%門檻'}"
+
     hit_tiers = []
-    detail_lines = []
+    detail_lines = [gain_note]
 
     for tier_key, tier_label in TIER_LABELS:
         info = symbol_levels.get(tier_key)
@@ -129,13 +157,18 @@ def check_precomputed_trendline_breakout(ctx: SignalContext) -> SignalResult:
         if breakout_price is None:
             detail_lines.append(f"【{tier_label}】預算資料缺少突破價位")
             continue
-        if today_close > breakout_price:
+        if today_close > breakout_price and gain_ok:
             hit_tiers.append(tier_label)
             a1 = info.get("anchor1_date", "-")
             a2 = info.get("anchor2_date", "-")
             detail_lines.append(
-                f"【{tier_label}】✅現價{today_close:.2f} > 昨晚預算突破價{breakout_price:.2f} "
-                f"(錨點 {a1}→{a2})"
+                f"【{tier_label}】✅現價{today_close:.2f} > 昨晚預算突破價{breakout_price:.2f}，"
+                f"且漲幅{pct_gain:+.2f}%達標 (錨點 {a1}→{a2})"
+            )
+        elif today_close > breakout_price and not gain_ok:
+            detail_lines.append(
+                f"【{tier_label}】現價{today_close:.2f} 已突破預算突破價{breakout_price:.2f}，"
+                f"但{gain_note}，不算數"
             )
         else:
             detail_lines.append(
