@@ -11,7 +11,7 @@ KD高腳
 """
 from .base import SignalContext, SignalResult, register_signal
 
-LOOKBACK_DAYS = 39
+LOOKBACK_DAYS = 30
 LOW_K_THRESHOLD = 50.0
 
 
