@@ -6,10 +6,20 @@
 存檔後：
 1. 立即在「本次」執行的伺服器上生效（呼叫 module_loader 重新載入訊號登記表）
 2. 可選擇「同時提交到 GitHub」，讓下次部署 / 重新啟動時也不會遺失變更
-   （沿用主程式已經在使用的 GITHUB_TOKEN / GITHUB_OWNER / GITHUB_REPO / GITHUB_BRANCH secrets）
+   （沿用主程式已經在使用的 GITHUB_TOKEN / GITHUB_OWNER / GITHUB_REPO / GITHUB_BRANCH secrets）QA
+
+參數面板 (2026-08-13 新增)：
+- 針對「全大寫命名、單純數字」的模組層級具名常數（例如 RISE_THRESHOLD_PCT = 9.5），
+  自動掃描出來、顯示成滑桿/數字輸入框，方便不看程式碼也能快速調整訊號門檻。
+- 調整面板數值，會直接同步改寫下方「原始碼」文字框裡對應那一行的內容，
+  兩邊共用同一顆「💾 儲存並重新載入」按鈕與「同時提交到 GitHub」勾選框，
+  存檔行為與原本的原始碼編輯器完全一致。
+- 同一個常數名稱在檔案中出現超過一次、或值不是單純數字常值（例如表達式、變數運算），
+  會自動略過、不列入面板，仍可在下方原始碼編輯器手動修改。
 """
 import base64
 import os
+import re
 
 import pandas as pd
 import requests
@@ -27,13 +37,59 @@ SIGNAL_DIR = os.path.join(
 )
 EXCLUDE_FILES = {"__init__.py", "base.py", "indicators.py", "module_loader.py"}
 
+# ===== 參數面板：具名常數掃描/改寫 =====
+# 只認「模組層級、全大寫命名、純數字常值」的賦值行，例如：
+#   RISE_THRESHOLD_PCT = 9.5
+#   LOOKBACK_DAYS = 22        # 往前找幾天
+# 不吃表達式、函式呼叫、字串、tuple 等，避免誤判/誤寫壞語法。
+CONST_LINE_RE = re.compile(
+    r'^(?P<name>[A-Z][A-Z0-9_]*)(?P<eq>\s*=\s*)(?P<value>-?\d+(?:\.\d+)?)(?P<tail>\s*(?:#.*)?)$'
+)
+
+
+def parse_editable_constants(content: str):
+    """掃描原始碼，回傳 {name: (raw_value_str, comment_text)}。
+    同一個名字出現超過一次的，一律排除(不列入面板)，避免改寫時改錯行或改到不該改的那一個。
+    """
+    counts = {}
+    raw_values = {}
+    comments = {}
+    for line in content.splitlines():
+        m = CONST_LINE_RE.match(line)
+        if not m:
+            continue
+        name = m.group("name")
+        counts[name] = counts.get(name, 0) + 1
+        raw_values[name] = m.group("value")
+        comment = (m.group("tail") or "").strip()
+        comments[name] = comment[1:].strip() if comment.startswith("#") else ""
+    return {name: raw_values[name] for name, c in counts.items() if c == 1}, comments
+
+
+def format_constant_value(new_value: float, was_float: bool) -> str:
+    """把面板調整後的數值格式化回原始碼字面量字串，盡量維持簡潔（不留多餘的0）。"""
+    if not was_float:
+        return str(int(round(new_value)))
+    text = f"{new_value:.4f}".rstrip("0")
+    if text.endswith("."):
+        text += "0"
+    return text
+
+
+def apply_constant_change(content: str, name: str, new_value_str: str) -> str:
+    """把 content 裡 `name = <數字>` 這一行的數字部分改成 new_value_str，其餘(含註解)不動。"""
+    pattern = re.compile(
+        rf'^({re.escape(name)}\s*=\s*)(-?\d+(?:\.\d+)?)(\s*(?:#.*)?)$', re.MULTILINE
+    )
+    return pattern.sub(lambda m: f"{m.group(1)}{new_value_str}{m.group(3)}", content, count=1)
+
 
 # ===== 沿用主程式既有的 GitHub 上傳方式 =====
 def github_repo_config():
     return {
         "token": st.secrets.get("GITHUB_TOKEN", ""),
         "owner": st.secrets.get("GITHUB_OWNER", "henglunlin"),
-        "repo": st.secrets.get("GITHUB_REPO", "stock-scanner-FUBAN"),
+        "repo": st.secrets.get("GITHUB_REPO", "henglunlin-stock-monitor-FUBAN"),
         "branch": st.secrets.get("GITHUB_BRANCH", "main"),
     }
 
@@ -117,8 +173,70 @@ else:
     with open(file_path, "r", encoding="utf-8") as f:
         original_content = f.read()
 
+    editor_key = f"editor_{picked_file}"
+    sync_snapshot_key = f"_panel_synced_{picked_file}"
+
+    # 目前「原始碼」內容的基準版本：如果 text_area 之前已經被建立過(session_state裡有)，
+    # 就以它目前的內容為準(可能是使用者手動編輯過的)；否則用剛從檔案讀到的內容。
+    base_content = st.session_state.get(editor_key, original_content)
+
+    # 若基準內容跟「上次面板同步完」的快照不一致，代表原始碼是被外部改動的
+    # (例如使用者直接在下方文字框手動編輯、或切換了檔案、或重新整理頁面)，
+    # 這時要把面板各個小工具的 session_state 清掉，讓面板重新依照目前原始碼的數值顯示，
+    # 避免面板顯示的還是舊的、已經跟原始碼不同步的數字。
+    if st.session_state.get(sync_snapshot_key) != base_content:
+        for k in list(st.session_state.keys()):
+            if k.startswith(f"panel_val_{picked_file}::"):
+                del st.session_state[k]
+
+    editable_constants, comments = parse_editable_constants(base_content)
+
+    # ===== 🎛️ 參數面板 (預設收起) =====
+    with st.expander("🎛️ 參數面板（快速調整具名常數，不用直接看程式碼）", expanded=False):
+        if not editable_constants:
+            st.caption(
+                "此檔案沒有偵測到可調整的具名常數"
+                "（全大寫命名 + 純數字常值 + 只出現一次），"
+                "可能本來就沒有寫死的門檻值，或該常數目前被排除(重複定義/非純數字)。"
+                "仍可在下方「原始碼」直接修改。"
+            )
+        else:
+            st.caption("拖動/輸入數值即可即時同步到下方原始碼；存檔請用下方「💾 儲存並重新載入」按鈕。")
+            working_content = base_content
+            for name, raw_val in editable_constants.items():
+                was_float = "." in raw_val
+                widget_key = f"panel_val_{picked_file}::{name}"
+                help_text = comments.get(name) or None
+
+                if was_float:
+                    current_val = float(raw_val)
+                    step = 0.5 if abs(current_val) >= 10 else 0.1
+                    new_val = st.number_input(
+                        name, value=current_val, step=step, format="%.2f",
+                        help=help_text, key=widget_key,
+                    )
+                else:
+                    current_val = int(raw_val)
+                    new_val = st.number_input(
+                        name, value=current_val, step=1,
+                        help=help_text, key=widget_key,
+                    )
+
+                new_val_str = format_constant_value(float(new_val), was_float)
+                # 只有數值真的變了才需要改寫這一行，避免無意義的字串重排(例如 9.50 vs 9.5)
+                if format_constant_value(current_val, was_float) != new_val_str:
+                    working_content = apply_constant_change(working_content, name, new_val_str)
+
+            if working_content != base_content:
+                base_content = working_content
+                # 面板改的內容，必須在下面 st.text_area 建立"之前"寫回 session_state，
+                # 這樣 text_area 才會顯示面板同步後的最新內容。
+                st.session_state[editor_key] = base_content
+
+    st.session_state[sync_snapshot_key] = base_content
+
     edited_content = st.text_area(
-        "原始碼", value=original_content, height=480, key=f"editor_{picked_file}",
+        "原始碼", value=base_content, height=480, key=editor_key,
     )
 
     also_push_github = st.checkbox(
