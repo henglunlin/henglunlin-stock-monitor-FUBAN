@@ -25,11 +25,13 @@ import requests
 from html import escape
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
+from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 
 st.set_page_config(page_title="台股監控面板", layout="wide")
 
@@ -2584,6 +2586,94 @@ else:
 # 監控表格本身在跳動」。run_every 是否啟用、間隔幾秒，沿用原本「啟用自動更新」
 # 開關與「刷新秒數」輸入框的邏輯：分組編輯解鎖中或編輯模式中一律暫停自動刷新，
 # 跟原本 time.sleep 那段的暫停條件完全一致。
+# =============================================================================
+# 平行抓取股票資料 (Phase 1)
+# =============================================================================
+# 原本 render_live_monitor() 裡對每檔股票是「依序」做完整套流程：
+# download_stock_data → get_last_price → get_stock_name → get_official_today_ohlc
+# → (缺值時) get_db_ohlc_for_date → compute_indicators，光是網路/DB延遲累加起來，
+# 股票一多就會拖慢整頁刷新速度。
+#
+# 這裡把「抓資料 + 算指標」這種純讀取、無副作用的步驟抽出來，用 ThreadPoolExecutor
+# 平行處理；至於 update_intraday_low/high (會寫 st.session_state)、run_stock_signals
+# (依賴前者算出的 session_open/high/low)、Telegram 推播、notified_stocks 這些
+# 「有狀態」或「跟輸出順序有關」的邏輯，全部維持在主執行緒、依照股票原本的順序
+# 依序執行，跟平行化之前完全一樣——只有「等網路/DB回應」這段被平行化，
+# 其餘行為(包含錯誤處理、訊號判斷、推播順序)不變。
+#
+# 富邦 REST / yfinance 都有各自的流量限制，平行度不宜開太高，避免瞬間送出
+# 大量請求觸發 429；預設 8，可依實際觀察到的限流狀況調整。
+FETCH_MAX_WORKERS = 8
+
+
+def _fetch_symbol_for_monitor(symbol, manager, price_ref_date, script_ctx):
+    """
+    平行抓取階段的 worker：只做讀取性質的 I/O + 純運算 (compute_indicators)，
+    不寫 st.session_state、不呼叫 run_stock_signals、不發送 Telegram。
+
+    在背景執行緒裡執行，所以進入函式後第一件事要先把主執行緒的
+    ScriptRunContext 掛到目前這個執行緒上，這是 Streamlit 官方文件建議的
+    多執行緒寫法 (參考: docs.streamlit.io/knowledge-base/using-streamlit/multithreading)，
+    這樣函式內部呼叫的 st.session_state.get(...) 讀取、以及 @st.cache_data
+    裝飾的函式(download_stock_data / get_last_price / get_stock_name /
+    get_official_today_ohlc / get_db_ohlc_for_date 內部用到的那些)才能正常運作。
+    """
+    if script_ctx is not None:
+        add_script_run_ctx(threading.current_thread(), script_ctx)
+
+    raw_df = download_stock_data(symbol)
+    df = normalize_ohlc(raw_df)
+    if df.empty:
+        raise ValueError("無法解析 yfinance 欄位格式")
+    price, price_source = get_last_price(symbol, df, manager)
+    stock_name = get_stock_name(symbol)
+    # 優先使用富邦官方 REST 今日開高低價；第二順位改查本地資料庫 price_ref_date
+    # 那一天的真實開高低 (邏輯跟平行化之前完全一樣，只是搬進 worker 函式裡)。
+    official_ohlc = get_official_today_ohlc(manager, symbol)
+    if official_ohlc.get("open") is None or official_ohlc.get("high") is None or official_ohlc.get("low") is None:
+        db_ohlc = get_db_ohlc_for_date(symbol, price_ref_date.strftime("%Y-%m-%d"))
+        for _k in ("open", "high", "low"):
+            if official_ohlc.get(_k) is None and db_ohlc.get(_k) is not None:
+                official_ohlc[_k] = db_ohlc[_k]
+
+    data = compute_indicators(df, price, price_ref_date=price_ref_date)
+
+    return {
+        "df": df,
+        "price": price,
+        "price_source": price_source,
+        "stock_name": stock_name,
+        "official_ohlc": official_ohlc,
+        "data": data,
+    }
+
+
+def _fetch_all_symbols_parallel(all_symbols_ordered, manager, price_ref_date):
+    """
+    對 all_symbols_ordered (已去重、保留原始出現順序) 平行呼叫 _fetch_symbol_for_monitor()。
+    回傳 dict: {symbol: (result_dict_or_None, exception_or_None)}，
+    呼叫端(主執行緒)依序讀取這個 dict 即可，不需要再關心平行處理的細節。
+    """
+    fetch_results = {}
+    if not all_symbols_ordered:
+        return fetch_results
+
+    script_ctx = get_script_run_ctx()
+    max_workers = min(FETCH_MAX_WORKERS, len(all_symbols_ordered))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_symbol = {
+            executor.submit(_fetch_symbol_for_monitor, sym, manager, price_ref_date, script_ctx): sym
+            for sym in all_symbols_ordered
+        }
+        for future in future_to_symbol:
+            sym = future_to_symbol[future]
+            try:
+                fetch_results[sym] = (future.result(), None)
+            except Exception as e:
+                fetch_results[sym] = (None, e)
+    return fetch_results
+
+
 _live_monitor_run_every = (
     f"{max(1, int(st.session_state.get('refresh_sec', REFRESH_SEC)))}s"
     if st.session_state.auto_refresh_enabled
@@ -2594,19 +2684,21 @@ _live_monitor_run_every = (
 
 
 @st.fragment(run_every=_live_monitor_run_every)
-def render_live_monitor():
+def render_live_monitor(rise_threshold):
+    # 2026-08-21 修正：Streamlit 較新版本的 check_fragment_path_policy 規則不允許
+    # 在 @st.fragment 函式「內部」建立寫入到 st.sidebar 的新元件(widget)——
+    # 原因是 run_every 定時觸發的 fragment-only rerun 只能局部更新 fragment
+    # 自己所在的那塊畫面，沒辦法同時更新側邊欄這種在 fragment 範圍「外面」的區域，
+    # 所以像 st.sidebar.number_input() 這種會在側邊欄建立新widget的呼叫，
+    # 一旦被 fragment-only rerun 觸發就會丟出
+    # StreamlitFragmentWidgetsNotAllowedOutsideError。
+    # 修法：把這個 widget 搬到 fragment 外面(在呼叫 render_live_monitor() 之前)，
+    # 用參數傳進來即可；widget 本身仍然只在「完整重跑」時才需要重新建立，
+    # 使用者調整門檻數值時本來就會觸發完整重跑，行為不受影響。
     tw_now = datetime.now(TW_TZ)
     st.caption(f"更新時間：{tw_now.strftime('%Y-%m-%d %H:%M:%S')}")
 
     render_taiex_chart()
-
-    rise_threshold = st.sidebar.number_input(
-        "漲幅門檻 (%)",
-        min_value=0.00,
-        value=5.00,
-        step=1.00,
-        format="%.2f",
-    )
 
     manager = st.session_state.fubon_manager
     if st.session_state.fubon_logged_in:
@@ -2678,6 +2770,26 @@ def render_live_monitor():
                         can_push_now = True
                         break
 
+    # 「今天應該視為哪個交易日」：平日就是今天；週六/週日一律往前推到最近的週五，
+    # 直接複用 download_stock_data() 內部也在用的 get_history_cutoff_date() 規則，
+    # 讓抓歷史資料/算昨收/跑訊號模組三處對「今天是哪一天」的認知永遠一致。
+    # (原本這行寫在每檔股票的迴圈裡面重算，但其實只跟 tw_now 有關、每檔股票都算出
+    #  同一個值，搬到迴圈外面算一次即可，語意完全不變。)
+    price_ref_date = get_effective_trading_reference_date(tw_now)
+
+    # ===== 平行抓取階段: 把所有分組、去重後的股票代碼一次送進 ThreadPoolExecutor =====
+    # (同一檔股票若同時存在多個分組，只會平行抓一次，下面依序處理時各分組直接共用
+    #  同一份結果 —— 這跟平行化之前「同一次刷新內第二次呼叫會命中 st.cache_data 快取」
+    #  的效果一致，只是現在用同一份記憶體內結果重複利用，更直接。)
+    all_symbols_ordered = []
+    _seen_symbols = set()
+    for _stocks in st.session_state.stock_groups.values():
+        for _symbol in _stocks:
+            if _symbol not in _seen_symbols:
+                _seen_symbols.add(_symbol)
+                all_symbols_ordered.append(_symbol)
+    fetch_results = _fetch_all_symbols_parallel(all_symbols_ordered, manager, price_ref_date)
+
     group_tables = {}
     group_up_summary = []
     for group_name, stocks in st.session_state.stock_groups.items():
@@ -2687,27 +2799,24 @@ def render_live_monitor():
         hit_names = []
         for symbol in stocks:
             try:
-                raw_df = download_stock_data(symbol)
-                df = normalize_ohlc(raw_df)
-                if df.empty:
-                    raise ValueError("無法解析 yfinance 欄位格式")
-                price, price_source = get_last_price(symbol, df, manager)
-                stock_name = get_stock_name(symbol)
-                # 「今天應該視為哪個交易日」：平日就是今天；週六/週日一律往前推到最近的週五，
-                # 直接複用 download_stock_data() 內部也在用的 get_history_cutoff_date() 規則，
-                # 讓抓歷史資料/算昨收/跑訊號模組三處對「今天是哪一天」的認知永遠一致。
-                price_ref_date = get_effective_trading_reference_date(tw_now)
+                fetch_result, fetch_error = fetch_results.get(symbol, (None, None))
+                if fetch_error is not None:
+                    raise fetch_error
+                if fetch_result is None:
+                    raise RuntimeError(f"{symbol} 沒有平行抓取結果 (不應發生)")
+                df = fetch_result["df"]
+                price = fetch_result["price"]
+                price_source = fetch_result["price_source"]
+                stock_name = fetch_result["stock_name"]
+                official_ohlc = fetch_result["official_ohlc"]
+                data = fetch_result["data"]
                 # 優先使用富邦官方 REST 今日開高低價（100% 準確，交易所自己算好的）；
                 # 第二順位改查本地資料庫「price_ref_date 那一天」的真實開高低
                 # (解決 TWSE DB / 非即時來源時，價格是固定值、session追蹤會失真的問題)；
                 # 最後才 fallback 回自己用 WS 逐筆成交追蹤的 session_low / session_high，
                 # 確保任何情況下都不會整頁掛掉。
-                official_ohlc = get_official_today_ohlc(manager, symbol)
-                if official_ohlc.get("open") is None or official_ohlc.get("high") is None or official_ohlc.get("low") is None:
-                    db_ohlc = get_db_ohlc_for_date(symbol, price_ref_date.strftime("%Y-%m-%d"))
-                    for _k in ("open", "high", "low"):
-                        if official_ohlc.get(_k) is None and db_ohlc.get(_k) is not None:
-                            official_ohlc[_k] = db_ohlc[_k]
+                # (以上抓取 + 缺值補值的邏輯已搬進 _fetch_symbol_for_monitor() 平行執行，
+                #  這裡開始才是原本就必須留在主執行緒依序處理的部分。)
                 if official_ohlc.get("low") is not None:
                     session_low = official_ohlc["low"]
                 else:
@@ -2718,7 +2827,7 @@ def render_live_monitor():
                     session_high = update_intraday_high(symbol, price, tw_now, price_source)
                 session_open = official_ohlc.get("open") if official_ohlc.get("open") is not None else price
 
-                data = compute_indicators(df, price, price_ref_date=price_ref_date)
+                # data (compute_indicators 的結果) 已經在平行抓取階段算好，直接複用，不再重算。
                 signal_hits, signal_display = run_stock_signals(
                     symbol, stock_name, df,
                     open_val=session_open,
@@ -2903,14 +3012,28 @@ def render_live_monitor():
         st.markdown('<div style="margin-bottom: 10px;"></div>', unsafe_allow_html=True)
 
 
-    with st.sidebar.expander("🔍 WebSocket Debug", expanded=False):
-        debug_code = st.text_input("輸入代碼看最後 WS 原始訊息", value="4919")
-        msg = manager.get_message(debug_code)
-        if msg:
-            st.caption(f"時間：{msg['time'].strftime('%Y-%m-%d %H:%M:%S')}")
-            st.json(msg["raw"])
-        else:
-            st.caption("尚未收到此代碼的 WebSocket 訊息")
+# 2026-08-21 修正：原本這個「🔍 WebSocket Debug」side bar 偵錯面板寫在
+# render_live_monitor() 內部，跟上面 rise_threshold 一樣，裡面的 st.text_input()
+# 會在側邊欄建立新widget，被 fragment-only rerun 觸發時一樣會噴
+# StreamlitFragmentWidgetsNotAllowedOutsideError。這個面板純粹是手動除錯用、
+# 不需要跟著 run_every 自動刷新，所以整塊搬到 fragment 外面即可，
+# 视覺順序(畫面最下方)不變。
+rise_threshold = st.sidebar.number_input(
+    "漲幅門檻 (%)",
+    min_value=0.00,
+    value=5.00,
+    step=1.00,
+    format="%.2f",
+)
 
+render_live_monitor(rise_threshold)
 
-render_live_monitor()
+with st.sidebar.expander("🔍 WebSocket Debug", expanded=False):
+    _debug_manager = st.session_state.fubon_manager
+    debug_code = st.text_input("輸入代碼看最後 WS 原始訊息", value="4919")
+    msg = _debug_manager.get_message(debug_code)
+    if msg:
+        st.caption(f"時間：{msg['time'].strftime('%Y-%m-%d %H:%M:%S')}")
+        st.json(msg["raw"])
+    else:
+        st.caption("尚未收到此代碼的 WebSocket 訊息")
