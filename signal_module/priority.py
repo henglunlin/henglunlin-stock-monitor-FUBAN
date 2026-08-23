@@ -77,6 +77,16 @@ _LABEL_TO_PRIORITY = {
 # 永遠不會被砍掉重造的 dict 物件，這裡只做 .clear() + .update() 原地更新，不是重新賦值
 # 一個新的 dict —— 這樣「🛠️ 訊號編輯」頁面每次存檔重新載入這個檔案之後，app.py 才能
 # 正確讀到最新的優先等級設定，細節說明見 base.py 裡 SIGNAL_PRIORITY 宣告處的註解）。
+#
+# 下面用 getattr(...) 保護、而不是直接假設 _base.SIGNAL_PRIORITY 一定存在：
+# base.py 是 module_loader 的 EXCLUDE_FILES、不會被「重新載入所有訊號」按鈕重新讀取，
+# 只有整個伺服器程序重新啟動才會套用 base.py 檔案上的最新內容。如果部署時 base.py
+# 忘了一起更新、或還沒重啟程序，這裡直接假設 SIGNAL_PRIORITY 已經宣告在 base.py 裡
+# 就會噴 AttributeError（module 'signal_module.base' has no attribute 'SIGNAL_PRIORITY'）
+# 導致這個檔案整個載入失敗。改成在執行期用 getattr 檢查、必要時動態建立這個屬性，
+# 不管 base.py 檔案上實際內容是新是舊、伺服器有沒有重啟過，這裡都能正常運作。
+if not isinstance(getattr(_base, "SIGNAL_PRIORITY", None), dict):
+    _base.SIGNAL_PRIORITY = {}
 _base.SIGNAL_PRIORITY.clear()
 _base.SIGNAL_PRIORITY.update(_LABEL_TO_PRIORITY)
 _base.SIGNAL_PRIORITY_DEFAULT = SIGNAL_PRIORITY_DEFAULT
