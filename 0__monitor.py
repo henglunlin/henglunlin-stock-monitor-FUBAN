@@ -1801,38 +1801,22 @@ def compute_indicators(df, price, price_ref_date=None):
 # 用歷史日K + 「今天」即時開高低收組成當日這一根K棒，餵給 signal_module 算指標、跑訊號，
 # 再依照「優先等級」規則收斂成單一「買賣訊號」欄位。
 from signal_module import module_loader
+from signal_module import base as signal_base
 from signal_module.base import SIGNAL_REGISTRY, SignalContext as ModuleSignalContext
 from signal_module.indicators import add_indicators as _sm_add_indicators
 
 if not SIGNAL_REGISTRY:
     module_loader.load_default_signal_modules()
 
-# 訊號優先等級：數字越小越重要（1 > 2 > 3）。同一天如果同等級的訊號一起觸發，就一起顯示；
-# 等級不同時只顯示等級數字最小（最重要）的那些。
-# key 對應到 signal_module 各檔案 register_signal() 裡的 label。
-# 不在下面清單內的訊號（例如漲幅達標）預設視為最低優先等級 3，可自行調整。
-SIGNAL_PRIORITY = {
-    "布林縮窄突破": 1,
-    "反向島狀": 1,
-    "下降趨勢線突破": 1,
-    "進入買入區間": 1,
-    "觸及停損價格": 1,
-    "3K反轉": 2,
-    "巧妙點": 2,
-    "雙跳空": 2,
-    "雙漲停": 2,
-    "島狀反轉": 2,
-    "KD高腳": 2,
-    "跌停": 2,
-    "單跳空": 2,
-    "周1K": 2,
-    "廣義下降三法": 3,
-    "漲停": 3,
-    "移動停利": 3,
-    "廣義上升三法": 3,
-    "三白兵": 3,
-}
-SIGNAL_PRIORITY_DEFAULT = 3
+# 訊號優先等級 (數字越小越重要，1 > 2 > 3) 的實際內容定義在 signal_module/priority.py，
+# 可以在那個檔案裡改，或用「🛠️ 訊號編輯」頁面(原始碼編輯器 / 🎛️ 參數面板)改。
+# 這裡刻意不寫成 `from signal_module.priority import SIGNAL_PRIORITY`：
+# 訊號編輯頁面存檔時，module_loader 是把 signal_module/*.py 每個檔案的模組物件整個砍掉重造
+# (不是 importlib.reload() 原地更新)，如果在這裡把值複製一份出來，往後在編輯頁面調整
+# 優先等級存檔之後，這裡拿到的還會是舊值。改成透過 signal_base (signal_module/base.py，
+# 在 module_loader 的 EXCLUDE_FILES 名單內、永遠不會被砍掉重造的模組) 在「呼叫當下」
+# 讀取 signal_base.SIGNAL_PRIORITY / signal_base.SIGNAL_PRIORITY_DEFAULT，
+# 才能正確反映即時編輯 (見 run_stock_signals() 內的用法，以及 base.py / priority.py 裡的說明)。
 
 # 廣義上升三法 / 廣義下降三法：這兩種型態訊號雜訊較多，單獨出現時不觸發 Telegram 推播；
 # 但只要「同時」有其他訊號一起命中（例如 廣義上升三法 + 巧妙點），就視為有效訊號、一併推送。
@@ -1955,7 +1939,7 @@ def run_stock_signals(symbol, name, df, open_val, high_val, low_val, close_val, 
             hit_list.append({
                 "label": label,
                 "kind": cfg.get("kind", "buy"),
-                "priority": SIGNAL_PRIORITY.get(label, SIGNAL_PRIORITY_DEFAULT),
+                "priority": signal_base.SIGNAL_PRIORITY.get(label, signal_base.SIGNAL_PRIORITY_DEFAULT),
                 "detail": result.detail,
             })
 
