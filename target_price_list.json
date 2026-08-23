@@ -1,1 +1,16 @@
-{}
+{
+  "2330.TW": {
+    "target_price": 2200.0,
+    "low_pct": 5.0,
+    "high_pct": 1.0,
+    "stop_loss": 1800.0,
+    "enabled": true
+  },
+  "3008.TW": {
+    "target_price": 5200.0,
+    "low_pct": 5.0,
+    "high_pct": 1.0,
+    "stop_loss": 4900.0,
+    "enabled": true
+  }
+}
