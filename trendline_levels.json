@@ -1,14 +1,14 @@
 {
   "computed_date": "2026-08-28",
-  "target_date": "2026-08-28",
-  "generated_at": "2026-08-28 03:53:15",
+  "target_date": "2026-08-31",
+  "generated_at": "2026-08-28 21:17:54",
   "symbol_count": 194,
   "levels": {
     "00981A.TW": {
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 29.99,
+        "breakout_price": 29.92,
         "anchor1_date": "2026-07-06",
         "anchor2_date": "2026-08-17",
         "anchor1_high": 32.45,
@@ -19,14 +19,7 @@
     "1303.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 209.13,
-        "anchor1_date": "2026-07-15",
-        "anchor2_date": "2026-08-17",
-        "anchor1_high": 230.0,
-        "anchor2_high": 215.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "1528.TW": {
       "short": null,
@@ -36,20 +29,13 @@
     "1536.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 51.22,
-        "anchor1_date": "2026-07-13",
-        "anchor2_date": "2026-08-17",
-        "anchor1_high": 57.2,
-        "anchor2_high": 52.8,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "1560.TW": {
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 737.47,
+        "breakout_price": 736.19,
         "anchor1_date": "2026-07-01",
         "anchor2_date": "2026-08-17",
         "anchor1_high": 790.0,
@@ -70,20 +56,13 @@
     "1597.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 140.15,
-        "anchor1_date": "2026-05-26",
-        "anchor2_date": "2026-08-20",
-        "anchor1_high": 221.0,
-        "anchor2_high": 147.5,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "1605.TW": {
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 40.31,
+        "breakout_price": 40.25,
         "anchor1_date": "2026-06-04",
         "anchor2_date": "2026-08-13",
         "anchor1_high": 44.0,
@@ -95,11 +74,11 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 76.21,
-        "anchor1_date": "2026-07-06",
-        "anchor2_date": "2026-08-13",
-        "anchor1_high": 88.6,
-        "anchor2_high": 79.8,
+        "breakout_price": 86.72,
+        "anchor1_date": "2026-05-27",
+        "anchor2_date": "2026-07-06",
+        "anchor1_high": 89.9,
+        "anchor2_high": 88.6,
         "tier_label": "中長期"
       }
     },
@@ -107,7 +86,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 70.86,
+        "breakout_price": 70.7,
         "anchor1_date": "2026-06-22",
         "anchor2_date": "2026-07-01",
         "anchor1_high": 78.4,
@@ -123,7 +102,7 @@
     "2049.TW": {
       "short": null,
       "mid": {
-        "breakout_price": 377.0,
+        "breakout_price": 374.5,
         "anchor1_date": "2026-08-13",
         "anchor2_date": "2026-08-20",
         "anchor1_high": 404.5,
@@ -131,7 +110,7 @@
         "tier_label": "中短期"
       },
       "long": {
-        "breakout_price": 400.2,
+        "breakout_price": 399.81,
         "anchor1_date": "2026-05-26",
         "anchor2_date": "2026-08-13",
         "anchor1_high": 426.0,
@@ -142,14 +121,7 @@
     "2233.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 174.38,
-        "anchor1_date": "2026-05-26",
-        "anchor2_date": "2026-08-18",
-        "anchor1_high": 394.0,
-        "anchor2_high": 201.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "2301.TW": {
       "short": null,
@@ -160,7 +132,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 122.07,
+        "breakout_price": 120.59,
         "anchor1_date": "2026-07-16",
         "anchor2_date": "2026-08-24",
         "anchor1_high": 168.0,
@@ -172,7 +144,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 1911.79,
+        "breakout_price": 1901.43,
         "anchor1_date": "2026-05-27",
         "anchor2_date": "2026-08-17",
         "anchor1_high": 2585.0,
@@ -184,10 +156,10 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 238.5,
-        "anchor1_date": "2026-05-25",
+        "breakout_price": 260.35,
+        "anchor1_date": "2026-05-26",
         "anchor2_date": "2026-06-12",
-        "anchor1_high": 305.5,
+        "anchor1_high": 299.0,
         "anchor2_high": 291.5,
         "tier_label": "中長期"
       }
@@ -201,7 +173,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 265.63,
+        "breakout_price": 264.83,
         "anchor1_date": "2026-06-03",
         "anchor2_date": "2026-08-13",
         "anchor1_high": 314.0,
@@ -212,14 +184,7 @@
     "2327.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 510.81,
-        "anchor1_date": "2026-07-01",
-        "anchor2_date": "2026-08-24",
-        "anchor1_high": 1220.0,
-        "anchor2_high": 580.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "2328.TW": {
       "short": null,
@@ -234,14 +199,7 @@
     "2344.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 183.7,
-        "anchor1_date": "2026-06-22",
-        "anchor2_date": "2026-08-18",
-        "anchor1_high": 233.5,
-        "anchor2_high": 192.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "2351.TW": {
       "short": null,
@@ -251,7 +209,14 @@
     "2355.TW": {
       "short": null,
       "mid": null,
-      "long": null
+      "long": {
+        "breakout_price": 51.52,
+        "anchor1_date": "2026-05-26",
+        "anchor2_date": "2026-06-12",
+        "anchor1_high": 67.5,
+        "anchor2_high": 64.4,
+        "tier_label": "中長期"
+      }
     },
     "2359.TW": {
       "short": null,
@@ -262,10 +227,10 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 54.79,
-        "anchor1_date": "2026-05-25",
+        "breakout_price": 62.91,
+        "anchor1_date": "2026-05-28",
         "anchor2_date": "2026-06-12",
-        "anchor1_high": 72.5,
+        "anchor1_high": 70.0,
         "anchor2_high": 68.8,
         "tier_label": "中長期"
       }
@@ -274,7 +239,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 1041.22,
+        "breakout_price": 1031.43,
         "anchor1_date": "2026-06-10",
         "anchor2_date": "2026-08-20",
         "anchor1_high": 1580.0,
@@ -301,7 +266,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 70.0,
+        "breakout_price": 69.94,
         "anchor1_date": "2026-06-18",
         "anchor2_date": "2026-07-09",
         "anchor1_high": 72.8,
@@ -313,7 +278,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 70.99,
+        "breakout_price": 70.96,
         "anchor1_date": "2026-06-22",
         "anchor2_date": "2026-07-07",
         "anchor1_high": 72.3,
@@ -323,21 +288,14 @@
     },
     "2408.TW": {
       "short": null,
-      "mid": {
-        "breakout_price": 523.0,
-        "anchor1_date": "2026-08-18",
-        "anchor2_date": "2026-08-24",
-        "anchor1_high": 553.0,
-        "anchor2_high": 538.0,
-        "tier_label": "中短期"
-      },
+      "mid": null,
       "long": null
     },
     "2428.TW": {
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 266.12,
+        "breakout_price": 263.56,
         "anchor1_date": "2026-07-06",
         "anchor2_date": "2026-08-20",
         "anchor1_high": 363.5,
@@ -349,7 +307,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 70.29,
+        "breakout_price": 70.06,
         "anchor1_date": "2026-07-06",
         "anchor2_date": "2026-08-13",
         "anchor1_high": 79.3,
@@ -366,7 +324,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 325.61,
+        "breakout_price": 324.64,
         "anchor1_date": "2026-06-04",
         "anchor2_date": "2026-08-24",
         "anchor1_high": 383.0,
@@ -383,7 +341,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 600.83,
+        "breakout_price": 598.93,
         "anchor1_date": "2026-07-07",
         "anchor2_date": "2026-08-18",
         "anchor1_high": 671.0,
@@ -404,20 +362,13 @@
     "2483.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 35.0,
-        "anchor1_date": "2026-07-06",
-        "anchor2_date": "2026-07-09",
-        "anchor1_high": 73.0,
-        "anchor2_high": 70.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "2492.TW": {
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 324.0,
+        "breakout_price": 317.0,
         "anchor1_date": "2026-07-01",
         "anchor2_date": "2026-07-06",
         "anchor1_high": 611.0,
@@ -429,7 +380,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 210.06,
+        "breakout_price": 206.85,
         "anchor1_date": "2026-07-03",
         "anchor2_date": "2026-08-12",
         "anchor1_high": 335.0,
@@ -444,14 +395,7 @@
     },
     "3006.TW": {
       "short": null,
-      "mid": {
-        "breakout_price": 280.0,
-        "anchor1_date": "2026-08-13",
-        "anchor2_date": "2026-08-24",
-        "anchor1_high": 285.5,
-        "anchor2_high": 282.0,
-        "tier_label": "中短期"
-      },
+      "mid": null,
       "long": null
     },
     "3008.TW": {
@@ -463,7 +407,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 133.5,
+        "breakout_price": 133.33,
         "anchor1_date": "2026-06-03",
         "anchor2_date": "2026-08-12",
         "anchor1_high": 143.5,
@@ -478,28 +422,14 @@
     },
     "3019.TW": {
       "short": null,
-      "mid": {
-        "breakout_price": 136.5,
-        "anchor1_date": "2026-08-17",
-        "anchor2_date": "2026-08-20",
-        "anchor1_high": 144.0,
-        "anchor2_high": 141.5,
-        "tier_label": "中短期"
-      },
-      "long": {
-        "breakout_price": 138.23,
-        "anchor1_date": "2026-06-22",
-        "anchor2_date": "2026-08-17",
-        "anchor1_high": 169.0,
-        "anchor2_high": 144.0,
-        "tier_label": "中長期"
-      }
+      "mid": null,
+      "long": null
     },
     "3026.TW": {
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 695.0,
+        "breakout_price": 685.0,
         "anchor1_date": "2026-07-09",
         "anchor2_date": "2026-08-21",
         "anchor1_high": 1045.0,
@@ -516,7 +446,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 48.63,
+        "breakout_price": 48.28,
         "anchor1_date": "2026-07-16",
         "anchor2_date": "2026-08-12",
         "anchor1_high": 59.4,
@@ -527,7 +457,14 @@
     "3034.TW": {
       "short": null,
       "mid": null,
-      "long": null
+      "long": {
+        "breakout_price": 564.4,
+        "anchor1_date": "2026-06-23",
+        "anchor2_date": "2026-08-26",
+        "anchor1_high": 606.0,
+        "anchor2_high": 567.0,
+        "tier_label": "中長期"
+      }
     },
     "3035.TW": {
       "short": null,
@@ -543,7 +480,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 505.35,
+        "breakout_price": 503.42,
         "anchor1_date": "2026-06-22",
         "anchor2_date": "2026-08-21",
         "anchor1_high": 598.0,
@@ -555,7 +492,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 49.86,
+        "breakout_price": 49.79,
         "anchor1_date": "2026-06-03",
         "anchor2_date": "2026-07-06",
         "anchor1_high": 54.5,
@@ -572,18 +509,25 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 158.31,
-        "anchor1_date": "2026-07-06",
-        "anchor2_date": "2026-08-20",
-        "anchor1_high": 340.0,
-        "anchor2_high": 187.0,
+        "breakout_price": 242.5,
+        "anchor1_date": "2026-06-22",
+        "anchor2_date": "2026-07-06",
+        "anchor1_high": 365.0,
+        "anchor2_high": 340.0,
         "tier_label": "中長期"
       }
     },
     "3152.TWO": {
       "short": null,
       "mid": null,
-      "long": null
+      "long": {
+        "breakout_price": 259.4,
+        "anchor1_date": "2026-06-30",
+        "anchor2_date": "2026-08-26",
+        "anchor1_high": 332.5,
+        "anchor2_high": 264.5,
+        "tier_label": "中長期"
+      }
     },
     "3163.TWO": {
       "short": null,
@@ -594,7 +538,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 769.39,
+        "breakout_price": 764.27,
         "anchor1_date": "2026-07-06",
         "anchor2_date": "2026-08-21",
         "anchor1_high": 964.0,
@@ -605,26 +549,12 @@
     "3189.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 936.52,
-        "anchor1_date": "2026-07-01",
-        "anchor2_date": "2026-08-18",
-        "anchor1_high": 939.0,
-        "anchor2_high": 937.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "3211.TWO": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 382.65,
-        "anchor1_date": "2026-07-13",
-        "anchor2_date": "2026-08-13",
-        "anchor1_high": 495.0,
-        "anchor2_high": 419.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "3221.TWO": {
       "short": null,
@@ -645,7 +575,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 457.96,
+        "breakout_price": 457.58,
         "anchor1_date": "2026-06-03",
         "anchor2_date": "2026-08-24",
         "anchor1_high": 481.0,
@@ -657,11 +587,11 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 108.83,
-        "anchor1_date": "2026-06-02",
-        "anchor2_date": "2026-08-13",
-        "anchor1_high": 168.0,
-        "anchor2_high": 119.5,
+        "breakout_price": 144.75,
+        "anchor1_date": "2026-05-27",
+        "anchor2_date": "2026-06-02",
+        "anchor1_high": 169.5,
+        "anchor2_high": 168.0,
         "tier_label": "中長期"
       }
     },
@@ -674,7 +604,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 218.42,
+        "breakout_price": 215.23,
         "anchor1_date": "2026-06-22",
         "anchor2_date": "2026-08-13",
         "anchor1_high": 371.5,
@@ -685,7 +615,14 @@
     "3362.TWO": {
       "short": null,
       "mid": null,
-      "long": null
+      "long": {
+        "breakout_price": 214.28,
+        "anchor1_date": "2026-06-18",
+        "anchor2_date": "2026-08-26",
+        "anchor1_high": 218.0,
+        "anchor2_high": 214.5,
+        "tier_label": "中長期"
+      }
     },
     "3406.TW": {
       "short": null,
@@ -700,23 +637,16 @@
     "3450.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 597.54,
-        "anchor1_date": "2026-06-23",
-        "anchor2_date": "2026-08-18",
-        "anchor1_high": 612.0,
-        "anchor2_high": 600.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "3455.TWO": {
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 268.45,
-        "anchor1_date": "2026-05-25",
+        "breakout_price": 269.41,
+        "anchor1_date": "2026-05-26",
         "anchor2_date": "2026-08-18",
-        "anchor1_high": 294.0,
+        "anchor1_high": 285.0,
         "anchor2_high": 271.5,
         "tier_label": "中長期"
       }
@@ -740,24 +670,17 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 689.03,
-        "anchor1_date": "2026-07-02",
-        "anchor2_date": "2026-08-13",
-        "anchor1_high": 838.0,
-        "anchor2_high": 730.0,
+        "breakout_price": 732.35,
+        "anchor1_date": "2026-05-26",
+        "anchor2_date": "2026-07-02",
+        "anchor1_high": 905.0,
+        "anchor2_high": 838.0,
         "tier_label": "中長期"
       }
     },
     "3605.TW": {
       "short": null,
-      "mid": {
-        "breakout_price": 113.25,
-        "anchor1_date": "2026-08-17",
-        "anchor2_date": "2026-08-25",
-        "anchor1_high": 136.5,
-        "anchor2_high": 121.0,
-        "tier_label": "中短期"
-      },
+      "mid": null,
       "long": null
     },
     "3624.TWO": {
@@ -784,7 +707,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 618.03,
+        "breakout_price": 615.26,
         "anchor1_date": "2026-07-02",
         "anchor2_date": "2026-08-17",
         "anchor1_high": 729.0,
@@ -801,7 +724,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 121.58,
+        "breakout_price": 120.0,
         "anchor1_date": "2026-06-23",
         "anchor2_date": "2026-07-01",
         "anchor1_high": 196.0,
@@ -812,20 +735,13 @@
     "4510.TWO": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 46.82,
-        "anchor1_date": "2026-06-02",
-        "anchor2_date": "2026-08-17",
-        "anchor1_high": 56.5,
-        "anchor2_high": 48.25,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "4526.TW": {
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 38.07,
+        "breakout_price": 37.93,
         "anchor1_date": "2026-06-04",
         "anchor2_date": "2026-07-02",
         "anchor1_high": 46.3,
@@ -837,7 +753,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 28.29,
+        "breakout_price": 28.18,
         "anchor1_date": "2026-05-26",
         "anchor2_date": "2026-08-13",
         "anchor1_high": 35.25,
@@ -849,7 +765,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 62.43,
+        "breakout_price": 62.11,
         "anchor1_date": "2026-06-02",
         "anchor2_date": "2026-08-17",
         "anchor1_high": 81.9,
@@ -871,7 +787,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 50.84,
+        "breakout_price": 50.67,
         "anchor1_date": "2026-05-29",
         "anchor2_date": "2026-08-13",
         "anchor1_high": 61.5,
@@ -883,7 +799,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 49.63,
+        "breakout_price": 49.47,
         "anchor1_date": "2026-06-02",
         "anchor2_date": "2026-08-19",
         "anchor1_high": 59.8,
@@ -895,7 +811,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 32.82,
+        "breakout_price": 32.61,
         "anchor1_date": "2026-06-02",
         "anchor2_date": "2026-08-17",
         "anchor1_high": 45.55,
@@ -906,16 +822,23 @@
     "4563.TWO": {
       "short": null,
       "mid": null,
-      "long": null
+      "long": {
+        "breakout_price": 41.38,
+        "anchor1_date": "2026-06-03",
+        "anchor2_date": "2026-08-26",
+        "anchor1_high": 54.0,
+        "anchor2_high": 42.0,
+        "tier_label": "中長期"
+      }
     },
     "4566.TW": {
       "short": null,
       "mid": {
-        "breakout_price": 67.1,
-        "anchor1_date": "2026-08-13",
-        "anchor2_date": "2026-08-19",
-        "anchor1_high": 79.2,
-        "anchor2_high": 74.8,
+        "breakout_price": 76.0,
+        "anchor1_date": "2026-08-10",
+        "anchor2_date": "2026-08-13",
+        "anchor1_high": 80.0,
+        "anchor2_high": 79.2,
         "tier_label": "中短期"
       },
       "long": null
@@ -923,7 +846,7 @@
     "4576.TW": {
       "short": null,
       "mid": {
-        "breakout_price": 219.5,
+        "breakout_price": 218.0,
         "anchor1_date": "2026-08-17",
         "anchor2_date": "2026-08-20",
         "anchor1_high": 233.0,
@@ -931,7 +854,7 @@
         "tier_label": "中短期"
       },
       "long": {
-        "breakout_price": 224.19,
+        "breakout_price": 223.17,
         "anchor1_date": "2026-05-27",
         "anchor2_date": "2026-08-13",
         "anchor1_high": 291.0,
@@ -946,35 +869,21 @@
     },
     "4583.TW": {
       "short": null,
-      "mid": {
-        "breakout_price": 461.0,
-        "anchor1_date": "2026-08-14",
-        "anchor2_date": "2026-08-20",
-        "anchor1_high": 516.0,
-        "anchor2_high": 494.0,
-        "tier_label": "中短期"
-      },
+      "mid": null,
       "long": {
-        "breakout_price": 465.38,
-        "anchor1_date": "2026-07-23",
-        "anchor2_date": "2026-08-14",
-        "anchor1_high": 597.0,
-        "anchor2_high": 516.0,
+        "breakout_price": 490.35,
+        "anchor1_date": "2026-05-26",
+        "anchor2_date": "2026-07-23",
+        "anchor1_high": 755.0,
+        "anchor2_high": 597.0,
         "tier_label": "中長期"
       }
     },
     "4585.TW": {
       "short": null,
-      "mid": {
-        "breakout_price": 303.75,
-        "anchor1_date": "2026-08-07",
-        "anchor2_date": "2026-08-17",
-        "anchor1_high": 327.5,
-        "anchor2_high": 318.0,
-        "tier_label": "中短期"
-      },
+      "mid": null,
       "long": {
-        "breakout_price": 310.94,
+        "breakout_price": 309.83,
         "anchor1_date": "2026-07-03",
         "anchor2_date": "2026-08-07",
         "anchor1_high": 354.0,
@@ -990,14 +899,7 @@
     "4749.TWO": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 759.84,
-        "anchor1_date": "2026-05-25",
-        "anchor2_date": "2026-08-25",
-        "anchor1_high": 1210.0,
-        "anchor2_high": 780.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "4909.TWO": {
       "short": null,
@@ -1008,7 +910,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 224.79,
+        "breakout_price": 224.71,
         "anchor1_date": "2026-05-26",
         "anchor2_date": "2026-06-23",
         "anchor1_high": 230.0,
@@ -1025,7 +927,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 279.31,
+        "breakout_price": 279.18,
         "anchor1_date": "2026-06-09",
         "anchor2_date": "2026-08-21",
         "anchor1_high": 287.0,
@@ -1036,34 +938,41 @@
     "4951.TWO": {
       "short": null,
       "mid": null,
-      "long": null
+      "long": {
+        "breakout_price": 77.6,
+        "anchor1_date": "2026-05-27",
+        "anchor2_date": "2026-08-26",
+        "anchor1_high": 137.0,
+        "anchor2_high": 80.3,
+        "tier_label": "中長期"
+      }
     },
     "4952.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 52.06,
-        "anchor1_date": "2026-07-03",
-        "anchor2_date": "2026-08-21",
-        "anchor1_high": 61.7,
-        "anchor2_high": 53.3,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "4956.TW": {
       "short": null,
       "mid": null,
-      "long": null
+      "long": {
+        "breakout_price": 37.89,
+        "anchor1_date": "2026-05-26",
+        "anchor2_date": "2026-08-26",
+        "anchor1_high": 53.8,
+        "anchor2_high": 38.6,
+        "tier_label": "中長期"
+      }
     },
     "4958.TW": {
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 465.33,
-        "anchor1_date": "2026-07-15",
-        "anchor2_date": "2026-08-18",
-        "anchor1_high": 656.0,
-        "anchor2_high": 513.0,
+        "breakout_price": 645.0,
+        "anchor1_date": "2026-07-01",
+        "anchor2_date": "2026-07-15",
+        "anchor1_high": 659.0,
+        "anchor2_high": 656.0,
         "tier_label": "中長期"
       }
     },
@@ -1071,7 +980,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 289.79,
+        "breakout_price": 289.36,
         "anchor1_date": "2026-06-03",
         "anchor2_date": "2026-08-24",
         "anchor1_high": 315.5,
@@ -1102,14 +1011,7 @@
     "4991.TWO": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 489.76,
-        "anchor1_date": "2026-05-25",
-        "anchor2_date": "2026-08-21",
-        "anchor1_high": 895.0,
-        "anchor2_high": 520.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "5243.TW": {
       "short": null,
@@ -1120,7 +1022,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 18263.16,
+        "breakout_price": 18229.47,
         "anchor1_date": "2026-06-22",
         "anchor2_date": "2026-08-14",
         "anchor1_high": 19880.0,
@@ -1142,7 +1044,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 66.79,
+        "breakout_price": 66.23,
         "anchor1_date": "2026-07-03",
         "anchor2_date": "2026-08-13",
         "anchor1_high": 88.8,
@@ -1169,7 +1071,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 309.52,
+        "breakout_price": 308.11,
         "anchor1_date": "2026-05-27",
         "anchor2_date": "2026-07-06",
         "anchor1_high": 401.0,
@@ -1180,14 +1082,7 @@
     "5469.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 72.63,
-        "anchor1_date": "2026-06-29",
-        "anchor2_date": "2026-08-13",
-        "anchor1_high": 94.0,
-        "anchor2_high": 78.1,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "5471.TW": {
       "short": null,
@@ -1208,7 +1103,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 31.9,
+        "breakout_price": 31.66,
         "anchor1_date": "2026-06-05",
         "anchor2_date": "2026-08-05",
         "anchor1_high": 45.55,
@@ -1235,7 +1130,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 54.83,
+        "breakout_price": 54.48,
         "anchor1_date": "2026-06-02",
         "anchor2_date": "2026-08-20",
         "anchor1_high": 75.9,
@@ -1266,20 +1161,13 @@
     "6173.TWO": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 206.47,
-        "anchor1_date": "2026-07-06",
-        "anchor2_date": "2026-08-21",
-        "anchor1_high": 362.5,
-        "anchor2_high": 227.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "6176.TW": {
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 107.88,
+        "breakout_price": 107.86,
         "anchor1_date": "2026-05-29",
         "anchor2_date": "2026-08-24",
         "anchor1_high": 109.5,
@@ -1291,7 +1179,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 110.68,
+        "breakout_price": 108.14,
         "anchor1_date": "2026-07-14",
         "anchor2_date": "2026-08-18",
         "anchor1_high": 194.5,
@@ -1328,10 +1216,10 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 105.7,
-        "anchor1_date": "2026-05-25",
+        "breakout_price": 105.22,
+        "anchor1_date": "2026-05-26",
         "anchor2_date": "2026-08-13",
-        "anchor1_high": 138.0,
+        "anchor1_high": 137.5,
         "anchor2_high": 111.0,
         "tier_label": "中長期"
       }
@@ -1339,7 +1227,14 @@
     "6224.TW": {
       "short": null,
       "mid": null,
-      "long": null
+      "long": {
+        "breakout_price": 80.19,
+        "anchor1_date": "2026-05-29",
+        "anchor2_date": "2026-08-26",
+        "anchor1_high": 97.5,
+        "anchor2_high": 81.0,
+        "tier_label": "中長期"
+      }
     },
     "6226.TW": {
       "short": null,
@@ -1360,7 +1255,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 1680.0,
+        "breakout_price": 1675.0,
         "anchor1_date": "2026-06-22",
         "anchor2_date": "2026-08-14",
         "anchor1_high": 1920.0,
@@ -1381,26 +1276,12 @@
     "6285.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 241.75,
-        "anchor1_date": "2026-05-28",
-        "anchor2_date": "2026-08-11",
-        "anchor1_high": 336.5,
-        "anchor2_high": 261.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "6290.TWO": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 247.17,
-        "anchor1_date": "2026-06-03",
-        "anchor2_date": "2026-07-07",
-        "anchor1_high": 375.0,
-        "anchor2_high": 326.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "6435.TWO": {
       "short": null,
@@ -1411,7 +1292,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 156.85,
+        "breakout_price": 156.48,
         "anchor1_date": "2026-05-28",
         "anchor2_date": "2026-07-01",
         "anchor1_high": 180.5,
@@ -1423,7 +1304,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 1853.61,
+        "breakout_price": 1846.67,
         "anchor1_date": "2026-05-27",
         "anchor2_date": "2026-06-23",
         "anchor1_high": 2305.0,
@@ -1434,19 +1315,12 @@
     "6456.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 68.94,
-        "anchor1_date": "2026-06-04",
-        "anchor2_date": "2026-08-20",
-        "anchor1_high": 95.1,
-        "anchor2_high": 71.6,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "6488.TWO": {
       "short": null,
       "mid": {
-        "breakout_price": 950.0,
+        "breakout_price": 928.75,
         "anchor1_date": "2026-08-18",
         "anchor2_date": "2026-08-24",
         "anchor1_high": 1120.0,
@@ -1454,7 +1328,7 @@
         "tier_label": "中短期"
       },
       "long": {
-        "breakout_price": 960.0,
+        "breakout_price": 940.0,
         "anchor1_date": "2026-07-15",
         "anchor2_date": "2026-08-18",
         "anchor1_high": 1600.0,
@@ -1466,11 +1340,11 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 54.83,
-        "anchor1_date": "2026-07-07",
-        "anchor2_date": "2026-08-18",
-        "anchor1_high": 69.5,
-        "anchor2_high": 58.0,
+        "breakout_price": 58.86,
+        "anchor1_date": "2026-06-23",
+        "anchor2_date": "2026-07-07",
+        "anchor1_high": 72.3,
+        "anchor2_high": 69.5,
         "tier_label": "中長期"
       }
     },
@@ -1483,7 +1357,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 78.24,
+        "breakout_price": 78.14,
         "anchor1_date": "2026-06-17",
         "anchor2_date": "2026-07-20",
         "anchor1_high": 83.0,
@@ -1495,7 +1369,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 85.72,
+        "breakout_price": 85.33,
         "anchor1_date": "2026-06-23",
         "anchor2_date": "2026-07-06",
         "anchor1_high": 104.0,
@@ -1507,7 +1381,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 42.57,
+        "breakout_price": 42.45,
         "anchor1_date": "2026-06-01",
         "anchor2_date": "2026-07-15",
         "anchor1_high": 49.8,
@@ -1528,14 +1402,7 @@
     "6693.TWO": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 165.92,
-        "anchor1_date": "2026-07-07",
-        "anchor2_date": "2026-08-19",
-        "anchor1_high": 280.0,
-        "anchor2_high": 187.5,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "6706.TW": {
       "short": null,
@@ -1556,7 +1423,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 79.36,
+        "breakout_price": 79.11,
         "anchor1_date": "2026-06-01",
         "anchor2_date": "2026-08-14",
         "anchor1_high": 94.5,
@@ -1572,13 +1439,20 @@
     "7712.TWO": {
       "short": null,
       "mid": null,
-      "long": null
+      "long": {
+        "breakout_price": 156.79,
+        "anchor1_date": "2026-07-06",
+        "anchor2_date": "2026-08-26",
+        "anchor1_high": 218.0,
+        "anchor2_high": 161.5,
+        "tier_label": "中長期"
+      }
     },
     "8028.TW": {
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 304.62,
+        "breakout_price": 303.06,
         "anchor1_date": "2026-07-06",
         "anchor2_date": "2026-07-17",
         "anchor1_high": 364.0,
@@ -1598,28 +1472,14 @@
     },
     "8043.TWO": {
       "short": null,
-      "mid": {
-        "breakout_price": 134.5,
-        "anchor1_date": "2026-08-13",
-        "anchor2_date": "2026-08-20",
-        "anchor1_high": 162.0,
-        "anchor2_high": 149.5,
-        "tier_label": "中短期"
-      },
-      "long": {
-        "breakout_price": 139.43,
-        "anchor1_date": "2026-07-02",
-        "anchor2_date": "2026-08-13",
-        "anchor1_high": 221.5,
-        "anchor2_high": 162.0,
-        "tier_label": "中長期"
-      }
+      "mid": null,
+      "long": null
     },
     "8046.TW": {
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 1365.68,
+        "breakout_price": 1364.09,
         "anchor1_date": "2026-07-16",
         "anchor2_date": "2026-08-17",
         "anchor1_high": 1415.0,
@@ -1631,7 +1491,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 52.95,
+        "breakout_price": 52.73,
         "anchor1_date": "2026-06-04",
         "anchor2_date": "2026-08-19",
         "anchor1_high": 66.0,
@@ -1642,26 +1502,12 @@
     "8155.TWO": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 361.78,
-        "anchor1_date": "2026-05-25",
-        "anchor2_date": "2026-06-18",
-        "anchor1_high": 432.5,
-        "anchor2_high": 413.5,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "8213.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 32.96,
-        "anchor1_date": "2026-05-27",
-        "anchor2_date": "2026-08-18",
-        "anchor1_high": 41.85,
-        "anchor2_high": 34.05,
-        "tier_label": "中長期"
-      }
+      "long": null
     },
     "8261.TW": {
       "short": null,
@@ -1672,7 +1518,7 @@
       "short": null,
       "mid": null,
       "long": {
-        "breakout_price": 244.7,
+        "breakout_price": 244.38,
         "anchor1_date": "2026-06-02",
         "anchor2_date": "2026-08-24",
         "anchor1_high": 264.5,
@@ -1687,19 +1533,12 @@
     },
     "8374.TW": {
       "short": null,
-      "mid": {
-        "breakout_price": 82.6,
-        "anchor1_date": "2026-08-17",
-        "anchor2_date": "2026-08-20",
-        "anchor1_high": 91.0,
-        "anchor2_high": 88.2,
-        "tier_label": "中短期"
-      },
+      "mid": null,
       "long": {
-        "breakout_price": 87.39,
-        "anchor1_date": "2026-05-25",
+        "breakout_price": 87.15,
+        "anchor1_date": "2026-05-26",
         "anchor2_date": "2026-08-13",
-        "anchor1_high": 118.5,
+        "anchor1_high": 117.0,
         "anchor2_high": 92.5,
         "tier_label": "中長期"
       }
@@ -1707,14 +1546,7 @@
     "8996.TW": {
       "short": null,
       "mid": null,
-      "long": {
-        "breakout_price": 1236.45,
-        "anchor1_date": "2026-07-01",
-        "anchor2_date": "2026-08-14",
-        "anchor1_high": 1620.0,
-        "anchor2_high": 1330.0,
-        "tier_label": "中長期"
-      }
+      "long": null
     }
   }
 }
