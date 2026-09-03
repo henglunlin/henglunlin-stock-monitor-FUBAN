@@ -1,4 +1,11 @@
 {
+  "2301.TW": {
+    "target_price": 175.0,
+    "low_pct": 5.0,
+    "high_pct": 5.0,
+    "stop_loss": 159.0,
+    "enabled": true
+  },
   "2330.TW": {
     "target_price": 2200.0,
     "low_pct": 5.0,
@@ -7,17 +14,17 @@
     "enabled": true
   },
   "3008.TW": {
-    "target_price": 5200.0,
+    "target_price": 6800.0,
     "low_pct": 5.0,
     "high_pct": 1.0,
-    "stop_loss": 4900.0,
+    "stop_loss": 6300.0,
     "enabled": true
   },
-  "2301.TW": {
-    "target_price": 175.0,
-    "low_pct": 5.0,
-    "high_pct": 5.0,
-    "stop_loss": 159.0,
+  "1303.TW": {
+    "target_price": 204.0,
+    "low_pct": 3.0,
+    "high_pct": 3.0,
+    "stop_loss": 185.0,
     "enabled": true
   }
 }
